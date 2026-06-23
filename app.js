@@ -7,6 +7,7 @@ const state = {
   lookupCache: new Map(),
   favorites: new Map(),
   textFavorites: new Map(),
+  kuromojiScriptLoading: null,
   visibleReadingKeys: new Set(),
   savedReadingKeys: new Set(),
   highlights: [],
@@ -68,15 +69,15 @@ const elements = {
 };
 
 const fallbackWordHints = {
-  昨日: { reading: "きのう", pos: "名词" },
-  東京: { reading: "とうきょう", pos: "名词" },
-  図書館: { reading: "としょかん", pos: "名词" },
-  日本語: { reading: "にほんご", pos: "名词" },
-  文章: { reading: "ぶんしょう", pos: "名词" },
-  単語: { reading: "たんご", pos: "名词" },
-  文法: { reading: "ぶんぽう", pos: "名词" },
-  使い方: { reading: "つかいかた", pos: "名词" },
-  理解: { reading: "りかい", pos: "名词 / サ变动词" },
+  昨日: { reading: "きのう", pos: "名词", meaning: "昨天" },
+  東京: { reading: "とうきょう", pos: "名词", meaning: "东京" },
+  図書館: { reading: "としょかん", pos: "名词", meaning: "图书馆" },
+  日本語: { reading: "にほんご", pos: "名词", meaning: "日语" },
+  文章: { reading: "ぶんしょう", pos: "名词", meaning: "文章；文本" },
+  単語: { reading: "たんご", pos: "名词", meaning: "单词" },
+  文法: { reading: "ぶんぽう", pos: "名词", meaning: "语法" },
+  使い方: { reading: "つかいかた", pos: "名词", meaning: "使用方法；用法" },
+  理解: { reading: "りかい", pos: "名词 / サ变动词", meaning: "理解" },
 };
 
 const fallbackWordsByLength = Object.keys(fallbackWordHints).sort((a, b) => b.length - a.length);
@@ -216,6 +217,11 @@ function updateSourceSummary() {
 }
 
 async function warmTokenizer() {
+  if (isStaticDeployment()) {
+    setDictionaryStatus("静态版已就绪", true);
+    return;
+  }
+
   try {
     await getTokenizer();
   } catch {
@@ -228,14 +234,22 @@ async function warmTokenizer() {
 }
 
 function getTokenizer() {
+  if (isStaticDeployment()) {
+    return Promise.reject(new Error("static deployment uses fallback tokenizer"));
+  }
+
   if (state.tokenizer) return Promise.resolve(state.tokenizer);
   if (state.tokenizerLoading) return state.tokenizerLoading;
 
-  state.tokenizerLoading = new Promise((resolve, reject) => {
-    let attempts = 0;
-    const waitForLibrary = () => {
-      attempts += 1;
-      if (window.kuromoji) {
+  state.tokenizerLoading = loadKuromojiLibrary()
+    .then(
+      () =>
+        new Promise((resolve, reject) => {
+          if (!window.kuromoji) {
+            reject(new Error("kuromoji unavailable"));
+            return;
+          }
+
         setDictionaryStatus("正在加载词典", false);
         window.kuromoji
           .builder({ dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/" })
@@ -248,24 +262,42 @@ function getTokenizer() {
             setDictionaryStatus("分词词典已就绪", true);
             resolve(tokenizer);
           });
-        return;
-      }
-
-      if (attempts > 40) {
-        reject(new Error("kuromoji unavailable"));
-        return;
-      }
-
-      setTimeout(waitForLibrary, 100);
-    };
-
-    waitForLibrary();
-  }).catch((error) => {
-    state.tokenizerLoading = null;
-    throw error;
-  });
+        }),
+    )
+    .catch((error) => {
+      state.tokenizerLoading = null;
+      throw error;
+    });
 
   return state.tokenizerLoading;
+}
+
+function loadKuromojiLibrary(timeout = 3500) {
+  if (window.kuromoji) return Promise.resolve();
+  if (state.kuromojiScriptLoading) return state.kuromojiScriptLoading;
+
+  state.kuromojiScriptLoading = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    const timer = window.setTimeout(() => {
+      state.kuromojiScriptLoading = null;
+      reject(new Error("kuromoji script timeout"));
+    }, timeout);
+
+    script.src = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js";
+    script.async = true;
+    script.onload = () => {
+      window.clearTimeout(timer);
+      resolve();
+    };
+    script.onerror = () => {
+      window.clearTimeout(timer);
+      state.kuromojiScriptLoading = null;
+      reject(new Error("kuromoji script failed"));
+    };
+    document.head.append(script);
+  });
+
+  return state.kuromojiScriptLoading;
 }
 
 function setDictionaryStatus(text, ready) {
@@ -274,10 +306,24 @@ function setDictionaryStatus(text, ready) {
 }
 
 function updateOnlineModeHint() {
+  if (isStaticDeployment()) {
+    setDictionaryStatus("静态版已就绪", true);
+    elements.analysisStatus.textContent = "线上静态版可使用阅读、假名、收藏和标记；联网释义需要后端服务。";
+    return;
+  }
+
   if (location.protocol === "file:") {
     setDictionaryStatus("请使用 http 链接", false);
     elements.analysisStatus.textContent = "当前是本地文件模式，无法使用在线查词；请打开局域网 http 链接。";
   }
+}
+
+function isStaticDeployment() {
+  return location.hostname.endsWith(".github.io");
+}
+
+function hasLookupApi() {
+  return location.protocol.startsWith("http") && !isStaticDeployment();
 }
 
 async function analyzeText() {
@@ -298,7 +344,7 @@ async function analyzeText() {
     tokens = normalizeKuromojiTokens(text, tokenizer.tokenize(text));
   } catch {
     tokens = fallbackTokenize(text);
-    setDictionaryStatus("使用备用分析", false);
+    setDictionaryStatus(isStaticDeployment() ? "静态版内置分析" : "使用备用分析", isStaticDeployment());
   }
 
   state.lastText = text;
@@ -1316,23 +1362,37 @@ async function lookupWord(token) {
 }
 
 async function fetchTrustedLookup(token) {
+  const localHint = fallbackWordHints[token.surface] || fallbackWordHints[token.base] || {};
+  const staticBrief = localHint.meaning || "线上静态版未连接后端词典；已保留读音和词性信息。";
+  const offlineBrief =
+    location.protocol === "file:"
+      ? "当前是 file:// 打开，无法连接在线查词"
+      : isStaticDeployment()
+        ? staticBrief
+        : "在线查词服务暂时不可用";
   const fallback = {
     word: token.surface,
-    reading: token.reading || "",
-    pos: token.pos || "词语",
-    brief: location.protocol === "file:" ? "当前是 file:// 打开，无法连接在线查词" : "在线查词服务暂时不可用",
+    reading: token.reading || localHint.reading || "",
+    pos: token.pos || localHint.pos || "词语",
+    brief: offlineBrief,
     status: "offline_or_unavailable",
-    chineseDefinitions: [],
+    chineseDefinitions: localHint.meaning ? [localHint.meaning] : [],
     referenceDefinitions: [],
     examples: [],
-    grammar: "暂无可靠语法说明来源。",
-    notices: [location.protocol === "file:" ? "当前是 file:// 打开，无法使用在线查词服务；请使用 http:// 局域网链接。" : "在线查词服务暂时不可用。"],
+    grammar: isStaticDeployment() ? "线上静态版暂不提供可靠语法说明；启用后端后可显示更完整解释。" : "暂无可靠语法说明来源。",
+    notices: [
+      location.protocol === "file:"
+        ? "当前是 file:// 打开，无法使用在线查词服务；请使用 http:// 局域网链接。"
+        : isStaticDeployment()
+          ? "当前是 GitHub Pages 静态版。阅读、假名、收藏和标记可用；联网词典和例句需要单独部署后端服务。"
+          : "在线查词服务暂时不可用。",
+    ],
     sources: [],
     aiDefinition: null,
     memoryDefinition: null,
   };
 
-  if (!location.protocol.startsWith("http")) return fallback;
+  if (!hasLookupApi()) return fallback;
 
   try {
     const params = new URLSearchParams({
