@@ -348,7 +348,7 @@ function normalizeApiBaseUrl(value) {
 
 async function checkLookupApiStatus() {
   try {
-    const response = await fetchWithTimeout(`${apiBaseUrl}/api/status`, 5000);
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/status`, 60000);
     if (!response.ok) throw new Error("status unavailable");
     const payload = await response.json();
     state.lookupApiOnline = Boolean(payload.online);
@@ -1451,7 +1451,7 @@ async function fetchTrustedLookup(token) {
       pos: token.pos || "",
       context: elements.sourceText.value || "",
     });
-    const response = await fetchWithTimeout(buildLookupApiUrl(params), 7000);
+    const response = await fetchWithTimeout(buildLookupApiUrl(params), apiBaseUrl ? 60000 : 7000);
     if (!response.ok) return fallback;
     const payload = await response.json();
     return normalizeLookupPayload(token, payload);
