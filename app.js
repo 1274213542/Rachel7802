@@ -69,6 +69,8 @@ const elements = {
   colorSwatches: [...document.querySelectorAll("[data-highlight-color]")],
 };
 
+const DEFAULT_LOOKUP_API_BASE_URL = "https://japanese-reading-assistant-api.onrender.com";
+const ANALYSIS_CACHE_VERSION = "backend-analysis-v2";
 const apiBaseUrl = getConfiguredApiBaseUrl();
 
 const fallbackWordHints = {
@@ -220,9 +222,14 @@ function updateSourceSummary() {
 }
 
 async function warmTokenizer() {
-  if (isStaticDeployment()) {
+  if (apiBaseUrl && (isStaticDeployment() || location.protocol === "file:")) {
     setDictionaryStatus(apiBaseUrl ? "后端词典待验证" : "静态版已就绪", true);
-    if (apiBaseUrl) checkLookupApiStatus();
+    checkLookupApiStatus();
+    return;
+  }
+
+  if (isStaticDeployment()) {
+    setDictionaryStatus("静态版已就绪", true);
     return;
   }
 
@@ -315,8 +322,13 @@ function updateOnlineModeHint() {
   }
 
   if (location.protocol === "file:") {
-    setDictionaryStatus("请使用 http 链接", false);
-    elements.analysisStatus.textContent = "当前是本地文件模式，无法使用在线查词；请打开局域网 http 链接。";
+    if (apiBaseUrl) {
+      setDictionaryStatus("后端词典待验证", true);
+      elements.analysisStatus.textContent = "当前是本地文件页，已配置线上后端；如果首次分析较慢，通常是免费服务器正在冷启动。";
+    } else {
+      setDictionaryStatus("请使用 http 链接", false);
+      elements.analysisStatus.textContent = "当前是本地文件模式，无法使用在线查词；请打开局域网 http 链接。";
+    }
   }
 }
 
@@ -325,7 +337,8 @@ function isStaticDeployment() {
 }
 
 function hasLookupApi() {
-  return location.protocol.startsWith("http") && (!isStaticDeployment() || Boolean(apiBaseUrl));
+  if (apiBaseUrl) return true;
+  return location.protocol.startsWith("http") && !isStaticDeployment();
 }
 
 function getConfiguredApiBaseUrl() {
@@ -335,7 +348,10 @@ function getConfiguredApiBaseUrl() {
     localStorage.setItem("japanese-reader-api-base-url", fromQuery);
     return fromQuery;
   }
-  return normalizeApiBaseUrl(localStorage.getItem("japanese-reader-api-base-url"));
+  const saved = normalizeApiBaseUrl(localStorage.getItem("japanese-reader-api-base-url"));
+  if (saved) return saved;
+  if (location.protocol === "file:" || isStaticDeployment()) return DEFAULT_LOOKUP_API_BASE_URL;
+  return "";
 }
 
 function normalizeApiBaseUrl(value) {
@@ -360,6 +376,10 @@ function buildLookupApiUrl(params) {
   return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
 }
 
+function buildAnalyzeApiUrl() {
+  return apiBaseUrl ? `${apiBaseUrl}/api/analyze` : "/api/analyze";
+}
+
 async function analyzeText() {
   const text = elements.sourceText.value.trim();
   if (!text) {
@@ -373,10 +393,17 @@ async function analyzeText() {
   closeDetailPanel();
 
   let tokens;
+  let usedAnalysisCache = false;
+  tokens = loadCachedAnalysis(text);
+  if (tokens) {
+    usedAnalysisCache = true;
+    setDictionaryStatus("已使用本地分析缓存", true);
+  }
+
   try {
-    tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
+    tokens = tokens || (hasLookupApi() ? await fetchBackendAnalysis(text) : null);
   } catch {
-    tokens = null;
+    tokens = tokens || null;
   }
 
   if (!tokens) {
@@ -402,6 +429,7 @@ async function analyzeText() {
   state.isEditingReader = false;
   state.highlights = loadHighlightsForText(text);
   renderReader(text, tokens);
+  saveCachedAnalysis(text, tokens);
   elements.analyzeButton.disabled = false;
   const lookupCount = tokens.filter((token) => token.lookup).length;
   elements.tokenCount.textContent = `${lookupCount} 个可查词`;
@@ -410,13 +438,15 @@ async function analyzeText() {
   updateReaderEditButton();
   collapseSourcePanel();
   elements.analysisStatus.textContent = lookupCount
-    ? "分析完成。桌面端悬停查看，点击打开详情；手机端轻触显示或隐藏。"
+    ? usedAnalysisCache
+      ? "已从本地缓存快速完成分析。桌面端悬停查看，点击打开详情；手机端轻触显示或隐藏。"
+      : "分析完成。桌面端悬停查看，点击打开详情；手机端轻触显示或隐藏。"
     : "分析完成，但没有识别到包含汉字的词语。";
 }
 
 async function fetchBackendAnalysis(text) {
   const response = await fetchWithTimeout(
-    `${apiBaseUrl}/api/analyze`,
+    buildAnalyzeApiUrl(),
     {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=UTF-8" },
@@ -431,6 +461,49 @@ async function fetchBackendAnalysis(text) {
   state.lookupApiOnline = true;
   setDictionaryStatus("后端读音分析已连接", true);
   return tokens;
+}
+
+function loadCachedAnalysis(text) {
+  try {
+    const raw = localStorage.getItem(getAnalysisCacheKey(text));
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    if (payload.version !== ANALYSIS_CACHE_VERSION || payload.text !== text) return null;
+    const tokens = normalizeBackendTokens(text, payload.tokens);
+    return tokens.length ? tokens : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedAnalysis(text, tokens) {
+  if (!text || !Array.isArray(tokens) || !tokens.length) return;
+  try {
+    localStorage.setItem(
+      getAnalysisCacheKey(text),
+      JSON.stringify({
+        version: ANALYSIS_CACHE_VERSION,
+        savedAt: new Date().toISOString(),
+        text,
+        tokens: tokens.map(({ id, surface, base, reading, pos, start, end, lookup }) => ({
+          id,
+          surface,
+          base,
+          reading,
+          pos,
+          start,
+          end,
+          lookup,
+        })),
+      }),
+    );
+  } catch {
+    // Local storage can be full or unavailable in private browsing.
+  }
+}
+
+function getAnalysisCacheKey(text) {
+  return `japanese-reader-analysis:${ANALYSIS_CACHE_VERSION}:${getTextFavoriteKey(text)}`;
 }
 
 function normalizeBackendTokens(text, rawTokens) {
@@ -529,7 +602,7 @@ function tokenizeJapaneseRun(run, offset, startIndex) {
     while (next < run.length) {
       const hasUpcomingSeed = fallbackWordsByLength.some((word) => run.startsWith(word, next));
       const hasUpcomingParticle = particles.some((particle) => run.startsWith(particle, next));
-      if (hasUpcomingSeed || hasUpcomingParticle) break;
+      if (hasUpcomingSeed || hasUpcomingParticle || shouldSplitBefore(run, cursor, next)) break;
       next += 1;
     }
 
@@ -540,6 +613,12 @@ function tokenizeJapaneseRun(run, offset, startIndex) {
   }
 
   return tokens;
+}
+
+function shouldSplitBefore(run, cursor, index) {
+  if (index <= cursor || index >= run.length || !isKanjiChar(run[index])) return false;
+  const previousChunk = run.slice(cursor, index);
+  return hasKanji(previousChunk) && containsKana(previousChunk);
 }
 
 function createFallbackToken(surface, start, index, lookup = hasKanji(surface)) {
@@ -1912,6 +1991,14 @@ function formatDate(value) {
 
 function hasKanji(text) {
   return /[\u3400-\u9fff々〆〤]/.test(text);
+}
+
+function containsKana(text) {
+  return /[\u3040-\u30ff]/.test(text);
+}
+
+function isKanjiChar(char) {
+  return /[\u3400-\u9fff々〆〤]/.test(char);
 }
 
 function kanaToHiragana(text) {
