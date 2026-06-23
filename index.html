@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>日语阅读助手</title>
+    <link rel="stylesheet" href="./styles.css?v=20260603-mobilemark1" />
+    <script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js" defer></script>
+    <script src="./app.js?v=20260603-mobilemark1" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Japanese Reading Assistant</p>
+          <h1>日语阅读助手</h1>
+        </div>
+        <div class="top-actions">
+          <span class="status-pill" id="dictionaryStatus">词典准备中</span>
+          <button class="ghost-button" id="settingsButton" type="button">阅读设置</button>
+          <button class="ghost-button" id="favoritesButton" type="button">收藏夹</button>
+        </div>
+      </header>
+
+      <main id="workspace" class="workspace">
+        <section id="inputPanel" class="input-panel" aria-labelledby="inputTitle">
+          <div class="section-heading">
+            <div>
+              <h2 id="inputTitle">输入文本</h2>
+              <p>粘贴日语文本后，系统会标记包含汉字的词语。</p>
+            </div>
+            <div class="input-header-actions">
+              <button class="text-button" id="sourceToggleButton" type="button">收起输入</button>
+              <button class="text-button" id="clearButton" type="button">清空</button>
+            </div>
+          </div>
+          <p id="sourceSummary" class="source-summary"></p>
+          <textarea id="sourceText" spellcheck="false">昨日、東京の図書館で日本語の文章を読みました。知らない単語を調べながら、文法の使い方も少しずつ理解できました。</textarea>
+          <div class="input-actions">
+            <div class="action-buttons">
+              <button class="primary-button" id="analyzeButton" type="button">分析文本</button>
+              <button class="ghost-button" id="saveTextButton" type="button">收藏本文</button>
+            </div>
+            <span id="analysisStatus" class="muted-status">桌面端悬停查看，点击打开详细解释；手机端轻触显示或隐藏注释。</span>
+          </div>
+        </section>
+
+        <section class="reader-panel" aria-labelledby="readerTitle">
+          <div class="section-heading">
+            <div>
+              <h2 id="readerTitle">阅读区</h2>
+              <p>原文保持干净显示，注释只在交互时出现。</p>
+            </div>
+            <div class="reader-actions">
+              <button class="ghost-button compact-button source-dock-button" id="sourceDockButton" type="button">源文本</button>
+              <button class="ghost-button compact-button" id="readerEditButton" type="button" disabled>编辑阅读区</button>
+              <button class="ghost-button compact-button" id="allReadingsButton" type="button" disabled>显示全部假名</button>
+              <span id="tokenCount" class="muted-status">尚未分析</span>
+            </div>
+          </div>
+          <article id="reader" class="reader empty">
+            <p>点击“分析文本”后，这里会显示可查词的日语原文。</p>
+          </article>
+        </section>
+      </main>
+
+      <aside id="detailPanel" class="detail-panel" aria-live="polite" aria-hidden="true">
+        <button class="icon-button close-detail" id="closeDetailButton" type="button" aria-label="关闭详情">×</button>
+        <div id="detailContent" class="detail-content">
+          <p class="empty-detail">点击一个词语后，这里会显示词典式解释。</p>
+        </div>
+      </aside>
+    </div>
+
+    <div id="tooltip" class="lookup-tooltip" role="status" aria-hidden="true"></div>
+    <div id="highlightToolbar" class="highlight-toolbar" aria-hidden="true">
+      <div class="highlight-tools" aria-label="重点标记颜色">
+        <button class="color-swatch active" type="button" data-highlight-color="lemon" aria-label="柠檬黄"></button>
+        <button class="color-swatch" type="button" data-highlight-color="mint" aria-label="薄荷绿"></button>
+        <button class="color-swatch" type="button" data-highlight-color="sky" aria-label="天空蓝"></button>
+        <button class="color-swatch" type="button" data-highlight-color="pink" aria-label="荧光粉"></button>
+      </div>
+      <button class="tooltip-action" id="markHighlightButton" type="button">标记</button>
+      <button class="tooltip-action secondary" id="clearHighlightsButton" type="button">清除</button>
+      <button class="tooltip-action secondary" id="editSelectionButton" type="button">编辑</button>
+    </div>
+
+    <div id="settingsDrawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" id="settingsBackdrop"></div>
+      <section class="drawer-panel compact-drawer" aria-labelledby="settingsTitle">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Reading Settings</p>
+            <h2 id="settingsTitle">阅读设置</h2>
+          </div>
+          <button class="icon-button" id="closeSettingsButton" type="button" aria-label="关闭阅读设置">×</button>
+        </div>
+        <div class="settings-list">
+          <label class="setting-row" for="fontSizeRange">
+            <span>
+              <strong>文字大小</strong>
+              <small>调整阅读区里的日语正文大小</small>
+            </span>
+            <output id="fontSizeValue">20px</output>
+          </label>
+          <input id="fontSizeRange" class="range-control" type="range" min="16" max="30" step="1" value="20" />
+
+          <label class="setting-row" for="lineHeightRange">
+            <span>
+              <strong>行距</strong>
+              <small>调整正文行与行之间的距离</small>
+            </span>
+            <output id="lineHeightValue">2.05</output>
+          </label>
+          <input id="lineHeightRange" class="range-control" type="range" min="1.55" max="2.5" step="0.05" value="2.05" />
+
+          <button class="ghost-button reset-settings" id="resetSettingsButton" type="button">恢复默认</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="favoritesDrawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" id="drawerBackdrop"></div>
+      <section class="drawer-panel" aria-labelledby="favoritesTitle">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Saved Items</p>
+            <h2 id="favoritesTitle">收藏夹</h2>
+          </div>
+          <button class="icon-button" id="closeFavoritesButton" type="button" aria-label="关闭收藏夹">×</button>
+        </div>
+        <div id="favoritesList" class="favorites-list"></div>
+      </section>
+    </div>
+  </body>
+</html>
