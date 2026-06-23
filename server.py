@@ -3,6 +3,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
@@ -276,7 +277,7 @@ def tokenize_japanese_run(run, offset, start_index):
         while next_cursor < len(run):
             has_seed = any(run.startswith(word, next_cursor) for word in FALLBACK_WORDS_BY_LENGTH)
             has_particle = any(run.startswith(particle, next_cursor) for particle in PARTICLES)
-            if has_seed or has_particle:
+            if has_seed or has_particle or should_split_before(run, cursor, next_cursor):
                 break
             next_cursor += 1
 
@@ -285,6 +286,13 @@ def tokenize_japanese_run(run, offset, start_index):
         cursor = next_cursor
         index += 1
     return tokens
+
+
+def should_split_before(run, cursor, index):
+    if index <= cursor or index >= len(run) or not is_kanji_char(run[index]):
+        return False
+    previous_chunk = run[cursor:index]
+    return has_kanji(previous_chunk) and contains_kana(previous_chunk)
 
 
 def create_fallback_token(surface, start, index, lookup=None):
@@ -312,8 +320,10 @@ def enrich_tokens_with_jisho(tokens, max_terms=80):
             unique_terms.append(surface)
 
     skipped_count = max(0, len(unique_terms) - max_terms)
-    for term in unique_terms[:max_terms]:
-        entry = fetch_jisho_cached(term)
+    terms_to_fetch = unique_terms[:max_terms]
+    entries_by_term = fetch_jisho_entries_concurrently(terms_to_fetch)
+
+    for term, entry in entries_by_term.items():
         if not entry:
             continue
         japanese = choose_japanese(entry, term, term)
@@ -327,6 +337,34 @@ def enrich_tokens_with_jisho(tokens, max_terms=80):
                 if pos:
                     token["pos"] = pos
     return min(len(unique_terms), max_terms), skipped_count
+
+
+def fetch_jisho_entries_concurrently(terms, max_workers=8):
+    if not terms:
+        return {}
+
+    results = {}
+    missing_terms = []
+    for term in terms:
+        if term in JISHO_CACHE:
+            results[term] = JISHO_CACHE[term]
+        else:
+            missing_terms.append(term)
+
+    if not missing_terms:
+        return results
+
+    worker_count = min(max_workers, len(missing_terms))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_term = {executor.submit(fetch_jisho_cached, term): term for term in missing_terms}
+        for future in as_completed(future_to_term):
+            term = future_to_term[future]
+            try:
+                results[term] = future.result()
+            except Exception:
+                results[term] = None
+
+    return results
 
 
 def fetch_jisho_cached(word):
@@ -517,6 +555,10 @@ def contains_kana(text):
 
 def has_kanji(text):
     return any("\u3400" <= char <= "\u9fff" or char in "々〆〤" for char in text)
+
+
+def is_kanji_char(char):
+    return "\u3400" <= char <= "\u9fff" or char in "々〆〤"
 
 
 def normalize_compare(text):
