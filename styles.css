@@ -487,6 +487,26 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.lookup-token.with-reading.has-ruby::before {
+  content: none;
+  display: none;
+}
+
+.lookup-token ruby {
+  ruby-align: center;
+  ruby-position: over;
+}
+
+.lookup-token rt {
+  color: rgba(15, 118, 110, 0.52);
+  font-family: var(--font-jp);
+  font-size: 0.42em;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+}
+
 .marked-text {
   border-radius: 4px;
   box-decoration-break: clone;
@@ -998,6 +1018,10 @@ textarea:focus {
   .lookup-token.with-reading::before {
     font-size: 0.38em;
     max-width: none;
+  }
+
+  .lookup-token rt {
+    font-size: 0.36em;
   }
 
   .drawer-panel {
