@@ -8,6 +8,7 @@ const state = {
   favorites: new Map(),
   textFavorites: new Map(),
   kuromojiScriptLoading: null,
+  lookupApiOnline: false,
   visibleReadingKeys: new Set(),
   savedReadingKeys: new Set(),
   highlights: [],
@@ -350,8 +351,10 @@ async function checkLookupApiStatus() {
     const response = await fetchWithTimeout(`${apiBaseUrl}/api/status`, 5000);
     if (!response.ok) throw new Error("status unavailable");
     const payload = await response.json();
+    state.lookupApiOnline = Boolean(payload.online);
     setDictionaryStatus(payload.online ? "后端词典已连接" : "后端词典异常", Boolean(payload.online));
   } catch {
+    state.lookupApiOnline = false;
     setDictionaryStatus("后端词典暂不可用", false);
   }
 }
@@ -379,7 +382,14 @@ async function analyzeText() {
     tokens = normalizeKuromojiTokens(text, tokenizer.tokenize(text));
   } catch {
     tokens = fallbackTokenize(text);
-    setDictionaryStatus(isStaticDeployment() ? "静态版内置分析" : "使用备用分析", isStaticDeployment());
+    const statusText = apiBaseUrl
+      ? state.lookupApiOnline
+        ? "后端词典已连接"
+        : "后端词典待验证"
+      : isStaticDeployment()
+        ? "静态版内置分析"
+        : "使用备用分析";
+    setDictionaryStatus(statusText, Boolean(apiBaseUrl ? state.lookupApiOnline : isStaticDeployment()));
   }
 
   state.lastText = text;
