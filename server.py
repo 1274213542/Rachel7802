@@ -317,7 +317,7 @@ def enrich_tokens_with_jisho(tokens, max_terms=80):
         if not entry:
             continue
         japanese = choose_japanese(entry, term, term)
-        reading = to_hiragana(japanese.get("reading", ""))
+        reading = build_surface_reading(term, to_hiragana(japanese.get("reading", "")), japanese.get("word", ""))
         senses = entry.get("senses") or []
         pos = translate_pos((senses[0].get("parts_of_speech") or []) if senses else [])
         for token in tokens:
@@ -333,6 +333,43 @@ def fetch_jisho_cached(word):
     if word not in JISHO_CACHE:
         JISHO_CACHE[word] = fetch_jisho(word)
     return JISHO_CACHE[word]
+
+
+def build_surface_reading(surface, dictionary_reading, dictionary_word):
+    reading = to_hiragana(dictionary_reading or "")
+    surface_suffix = kana_suffix_after_last_kanji(surface)
+    if not reading or not surface_suffix:
+        return reading
+
+    base_suffix = kana_suffix_after_last_kanji(dictionary_word or "")
+    stem = reading
+    if base_suffix:
+        base_suffix = to_hiragana(base_suffix)
+        if stem.endswith(base_suffix):
+            stem = stem[: -len(base_suffix)]
+
+    overlap = longest_overlap(stem, surface_suffix)
+    return stem + surface_suffix[overlap:]
+
+
+def kana_suffix_after_last_kanji(text):
+    value = to_hiragana(text or "")
+    last_kanji = -1
+    for index, char in enumerate(value):
+        if has_kanji(char):
+            last_kanji = index
+    if last_kanji < 0 or last_kanji + 1 >= len(value):
+        return ""
+    suffix = value[last_kanji + 1 :]
+    return suffix if contains_kana(suffix) else ""
+
+
+def longest_overlap(left, right):
+    max_length = min(len(left), len(right))
+    for size in range(max_length, 0, -1):
+        if left.endswith(right[:size]):
+            return size
+    return 0
 
 
 def build_brief(ai_definition, memory_definition, has_openai_key):
