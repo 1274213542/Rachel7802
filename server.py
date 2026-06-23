@@ -18,6 +18,8 @@ MYMEMORY_API_URL = "https://api.mymemory.translated.net/get"
 DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 TRADITIONAL_TO_SIMPLIFIED = {}
 JISHO_CACHE = {}
+JANOME_TOKENIZER = None
+JANOME_IMPORT_ERROR = None
 
 FALLBACK_WORD_HINTS = {
     "昨日": {"reading": "きのう", "pos": "名词", "meaning": "昨天"},
@@ -219,14 +221,18 @@ def lookup_entry(word, surface, reading, pos, context):
 
 def analyze_text(text):
     text = (text or "").strip()
-    tokens = fallback_tokenize(text)
     notices = []
     if not text:
         return {"tokens": [], "lookupCount": 0, "readableCount": 0, "source": "backend_fallback", "notices": ["文本为空。"]}
 
-    enriched_count, skipped_count = enrich_tokens_with_jisho(tokens)
-    if skipped_count:
-        notices.append(f"为避免在线查询过慢，本次只补全前 {enriched_count} 个需要联网确认读音的词。")
+    tokens = janome_tokenize(text)
+    source = "backend_janome"
+    if tokens is None:
+        tokens = fallback_tokenize(text)
+        source = "backend_jisho_enriched"
+        enriched_count, skipped_count = enrich_tokens_with_jisho(tokens)
+        if skipped_count:
+            notices.append(f"为避免在线查询过慢，本次只补全前 {enriched_count} 个需要联网确认读音的词。")
 
     lookup_count = sum(1 for token in tokens if token.get("lookup"))
     readable_count = sum(1 for token in tokens if token.get("lookup") and token.get("reading"))
@@ -234,9 +240,63 @@ def analyze_text(text):
         "tokens": tokens,
         "lookupCount": lookup_count,
         "readableCount": readable_count,
-        "source": "backend_jisho_enriched",
+        "source": source,
         "notices": notices,
     }
+
+
+def get_janome_tokenizer():
+    global JANOME_TOKENIZER, JANOME_IMPORT_ERROR
+    if JANOME_TOKENIZER:
+        return JANOME_TOKENIZER
+    if JANOME_IMPORT_ERROR:
+        return None
+    try:
+        from janome.tokenizer import Tokenizer
+
+        JANOME_TOKENIZER = Tokenizer()
+        return JANOME_TOKENIZER
+    except Exception as error:
+        JANOME_IMPORT_ERROR = error
+        return None
+
+
+def janome_tokenize(text):
+    tokenizer = get_janome_tokenizer()
+    if not tokenizer:
+        return None
+
+    tokens = []
+    cursor = 0
+    for index, token in enumerate(tokenizer.tokenize(text)):
+        surface = token.surface
+        found_at = text.find(surface, cursor)
+        start = found_at if found_at >= 0 else cursor
+        end = start + len(surface)
+        cursor = end
+
+        pos_parts = [part for part in (token.part_of_speech or "").split(",") if part and part != "*"]
+        pos_head = pos_parts[0] if pos_parts else "词语"
+        reading = to_hiragana(token.reading if token.reading and token.reading != "*" else "")
+        ruby_segments = build_ruby_segments(surface, reading)
+        display_reading = "".join(segment.get("reading", "") for segment in ruby_segments if segment.get("reading"))
+        lookup = has_kanji(surface) and pos_head not in {"記号", "助詞", "助動詞"}
+
+        tokens.append(
+            {
+                "id": f"token-{index}",
+                "surface": surface,
+                "base": token.base_form if token.base_form and token.base_form != "*" else surface,
+                "reading": reading,
+                "displayReading": display_reading,
+                "rubySegments": ruby_segments,
+                "pos": translate_japanese_pos(pos_head),
+                "start": start,
+                "end": end,
+                "lookup": bool(lookup),
+            }
+        )
+    return tokens
 
 
 def fallback_tokenize(text):
@@ -297,12 +357,16 @@ def should_split_before(run, cursor, index):
 
 def create_fallback_token(surface, start, index, lookup=None):
     hint = FALLBACK_WORD_HINTS.get(surface, {})
+    reading = hint.get("reading", "")
+    ruby_segments = build_ruby_segments(surface, reading)
     should_lookup = has_kanji(surface) if lookup is None else lookup
     return {
         "id": f"token-{index}",
         "surface": surface,
         "base": surface,
-        "reading": hint.get("reading", ""),
+        "reading": reading,
+        "displayReading": "".join(segment.get("reading", "") for segment in ruby_segments if segment.get("reading")),
+        "rubySegments": ruby_segments,
         "pos": hint.get("pos", "词语"),
         "start": start,
         "end": start + len(surface),
@@ -326,14 +390,21 @@ def enrich_tokens_with_jisho(tokens, max_terms=80):
     for term, entry in entries_by_term.items():
         if not entry:
             continue
-        japanese = choose_japanese(entry, term, term)
+        japanese = choose_exact_japanese(entry, term)
+        if not japanese:
+            continue
         reading = build_surface_reading(term, to_hiragana(japanese.get("reading", "")), japanese.get("word", ""))
+        ruby_segments = build_ruby_segments(term, reading)
         senses = entry.get("senses") or []
         pos = translate_pos((senses[0].get("parts_of_speech") or []) if senses else [])
         for token in tokens:
             if token.get("surface") == term:
                 if reading:
                     token["reading"] = reading
+                    token["displayReading"] = "".join(
+                        segment.get("reading", "") for segment in ruby_segments if segment.get("reading")
+                    )
+                    token["rubySegments"] = ruby_segments
                 if pos:
                     token["pos"] = pos
     return min(len(unique_terms), max_terms), skipped_count
@@ -388,6 +459,83 @@ def build_surface_reading(surface, dictionary_reading, dictionary_word):
 
     overlap = longest_overlap(stem, surface_suffix)
     return stem + surface_suffix[overlap:]
+
+
+def build_ruby_segments(surface, reading):
+    surface = surface or ""
+    reading = to_hiragana(reading or "")
+    if not surface or not reading or not has_kanji(surface):
+        return [{"text": surface}]
+
+    chunks = split_kana_kanji_chunks(surface)
+    segments = []
+    reading_index = 0
+
+    for chunk_index, chunk in enumerate(chunks):
+        text = chunk["text"]
+        if chunk["kind"] == "kana":
+            kana = to_hiragana(text)
+            if reading.startswith(kana, reading_index):
+                reading_index += len(kana)
+            segments.append({"text": text})
+            continue
+
+        next_kana = ""
+        for later in chunks[chunk_index + 1 :]:
+            if later["kind"] == "kana":
+                next_kana = to_hiragana(later["text"])
+                break
+
+        if next_kana:
+            next_index = reading.find(next_kana, reading_index)
+            if next_index >= reading_index:
+                chunk_reading = reading[reading_index:next_index]
+            else:
+                next_index = reading_index
+                chunk_reading = ""
+        else:
+            next_index = len(reading)
+            chunk_reading = reading[reading_index:]
+
+        if chunk_reading:
+            segments.append({"text": text, "reading": chunk_reading})
+        else:
+            segments.append({"text": text})
+        reading_index = next_index
+
+    return segments
+
+
+def split_kana_kanji_chunks(text):
+    chunks = []
+    current = ""
+    current_kind = ""
+    for char in text:
+        kind = "kanji" if is_kanji_char(char) else "kana" if is_kana_char(char) else "other"
+        if current and kind != current_kind:
+            chunks.append({"kind": current_kind, "text": current})
+            current = ""
+        current += char
+        current_kind = kind
+    if current:
+        chunks.append({"kind": current_kind, "text": current})
+    return chunks
+
+
+def translate_japanese_pos(pos):
+    return {
+        "名詞": "名词",
+        "動詞": "动词",
+        "形容詞": "形容词",
+        "形容動詞": "な形容词",
+        "副詞": "副词",
+        "連体詞": "连体词",
+        "接続詞": "接续词",
+        "助詞": "助词",
+        "助動詞": "助动词",
+        "感動詞": "感叹词",
+        "記号": "符号",
+    }.get(pos, pos or "词语")
 
 
 def kana_suffix_after_last_kanji(text):
@@ -561,6 +709,10 @@ def is_kanji_char(char):
     return "\u3400" <= char <= "\u9fff" or char in "々〆〤"
 
 
+def is_kana_char(char):
+    return "\u3040" <= char <= "\u30ff"
+
+
 def normalize_compare(text):
     return "".join(str(text or "").lower().split())
 
@@ -731,6 +883,14 @@ def choose_japanese(jisho, word, surface):
         if item.get("word") in {word, surface}:
             return item
     return items[0] if items else {}
+
+
+def choose_exact_japanese(jisho, surface):
+    target = normalize_compare(surface)
+    for item in jisho.get("japanese") or []:
+        if normalize_compare(item.get("word", "")) == target:
+            return item
+    return None
 
 
 def build_reference_definitions(senses):
