@@ -5,6 +5,7 @@ from urllib.request import Request, urlopen
 import argparse
 import json
 import os
+import re
 import socket
 import ssl
 
@@ -15,13 +16,58 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 MYMEMORY_API_URL = "https://api.mymemory.translated.net/get"
 DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 TRADITIONAL_TO_SIMPLIFIED = {}
+JISHO_CACHE = {}
+
+FALLBACK_WORD_HINTS = {
+    "昨日": {"reading": "きのう", "pos": "名词", "meaning": "昨天"},
+    "今日": {"reading": "きょう", "pos": "名词", "meaning": "今天"},
+    "明日": {"reading": "あした", "pos": "名词", "meaning": "明天"},
+    "東京": {"reading": "とうきょう", "pos": "名词", "meaning": "东京"},
+    "大阪": {"reading": "おおさか", "pos": "名词", "meaning": "大阪"},
+    "京都": {"reading": "きょうと", "pos": "名词", "meaning": "京都"},
+    "図書館": {"reading": "としょかん", "pos": "名词", "meaning": "图书馆"},
+    "学校": {"reading": "がっこう", "pos": "名词", "meaning": "学校"},
+    "大学": {"reading": "だいがく", "pos": "名词", "meaning": "大学"},
+    "先生": {"reading": "せんせい", "pos": "名词", "meaning": "老师"},
+    "学生": {"reading": "がくせい", "pos": "名词", "meaning": "学生"},
+    "日本": {"reading": "にほん", "pos": "名词", "meaning": "日本"},
+    "日本語": {"reading": "にほんご", "pos": "名词", "meaning": "日语"},
+    "中国語": {"reading": "ちゅうごくご", "pos": "名词", "meaning": "中文"},
+    "英語": {"reading": "えいご", "pos": "名词", "meaning": "英语"},
+    "文章": {"reading": "ぶんしょう", "pos": "名词", "meaning": "文章；文本"},
+    "単語": {"reading": "たんご", "pos": "名词", "meaning": "单词"},
+    "文法": {"reading": "ぶんぽう", "pos": "名词", "meaning": "语法"},
+    "使い方": {"reading": "つかいかた", "pos": "名词", "meaning": "使用方法；用法"},
+    "理解": {"reading": "りかい", "pos": "名词 / サ变动词", "meaning": "理解"},
+    "勉強": {"reading": "べんきょう", "pos": "名词 / サ变动词", "meaning": "学习"},
+    "研究": {"reading": "けんきゅう", "pos": "名词 / サ变动词", "meaning": "研究"},
+    "生活": {"reading": "せいかつ", "pos": "名词 / サ变动词", "meaning": "生活"},
+    "文化": {"reading": "ぶんか", "pos": "名词", "meaning": "文化"},
+    "社会": {"reading": "しゃかい", "pos": "名词", "meaning": "社会"},
+}
+
+FALLBACK_WORDS_BY_LENGTH = sorted(FALLBACK_WORD_HINTS, key=len, reverse=True)
+PARTICLES = ["から", "まで", "ながら", "こと", "もの", "ため", "よう", "ので", "の", "で", "を", "も", "は", "が", "に", "へ", "と", "や"]
+JAPANESE_RUN_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff々〆〤]+|[^\u3040-\u30ff\u3400-\u9fff々〆〤]+")
+JAPANESE_ONLY_RE = re.compile(r"^[\u3040-\u30ff\u3400-\u9fff々〆〤]+$")
 
 
 class ReaderHandler(SimpleHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/lookup":
             self.handle_lookup(parsed)
+            return
+        if parsed.path == "/api/analyze":
+            query = parse_qs(parsed.query)
+            self.write_json(analyze_text(first(query.get("text"))))
             return
         if parsed.path == "/api/status":
             self.write_json(
@@ -34,6 +80,18 @@ class ReaderHandler(SimpleHTTPRequestHandler):
             )
             return
         super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/analyze":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        length = int(self.headers.get("Content-Length") or "0")
+        raw = self.rfile.read(min(length, 120000))
+        text = raw.decode("utf-8", errors="replace")
+        self.write_json(analyze_text(text))
 
     def handle_lookup(self, parsed):
         query = parse_qs(parsed.query)
@@ -156,6 +214,125 @@ def lookup_entry(word, surface, reading, pos, context):
             has_openai_key,
         ),
     }
+
+
+def analyze_text(text):
+    text = (text or "").strip()
+    tokens = fallback_tokenize(text)
+    notices = []
+    if not text:
+        return {"tokens": [], "lookupCount": 0, "readableCount": 0, "source": "backend_fallback", "notices": ["文本为空。"]}
+
+    enriched_count, skipped_count = enrich_tokens_with_jisho(tokens)
+    if skipped_count:
+        notices.append(f"为避免在线查询过慢，本次只补全前 {enriched_count} 个需要联网确认读音的词。")
+
+    lookup_count = sum(1 for token in tokens if token.get("lookup"))
+    readable_count = sum(1 for token in tokens if token.get("lookup") and token.get("reading"))
+    return {
+        "tokens": tokens,
+        "lookupCount": lookup_count,
+        "readableCount": readable_count,
+        "source": "backend_jisho_enriched",
+        "notices": notices,
+    }
+
+
+def fallback_tokenize(text):
+    tokens = []
+    index = 0
+    for match in JAPANESE_RUN_RE.finditer(text):
+        surface = match.group(0)
+        if JAPANESE_ONLY_RE.match(surface):
+            split_tokens = tokenize_japanese_run(surface, match.start(), index)
+            tokens.extend(split_tokens)
+            index += len(split_tokens)
+        else:
+            tokens.append(create_fallback_token(surface, match.start(), index, False))
+            index += 1
+    return tokens
+
+
+def tokenize_japanese_run(run, offset, start_index):
+    tokens = []
+    cursor = 0
+    index = start_index
+    while cursor < len(run):
+        matched_seed = next((word for word in FALLBACK_WORDS_BY_LENGTH if run.startswith(word, cursor)), "")
+        if matched_seed:
+            tokens.append(create_fallback_token(matched_seed, offset + cursor, index, True))
+            cursor += len(matched_seed)
+            index += 1
+            continue
+
+        matched_particle = next((particle for particle in PARTICLES if run.startswith(particle, cursor)), "")
+        if matched_particle:
+            tokens.append(create_fallback_token(matched_particle, offset + cursor, index, False))
+            cursor += len(matched_particle)
+            index += 1
+            continue
+
+        next_cursor = cursor + 1
+        while next_cursor < len(run):
+            has_seed = any(run.startswith(word, next_cursor) for word in FALLBACK_WORDS_BY_LENGTH)
+            has_particle = any(run.startswith(particle, next_cursor) for particle in PARTICLES)
+            if has_seed or has_particle:
+                break
+            next_cursor += 1
+
+        surface = run[cursor:next_cursor]
+        tokens.append(create_fallback_token(surface, offset + cursor, index, has_kanji(surface)))
+        cursor = next_cursor
+        index += 1
+    return tokens
+
+
+def create_fallback_token(surface, start, index, lookup=None):
+    hint = FALLBACK_WORD_HINTS.get(surface, {})
+    should_lookup = has_kanji(surface) if lookup is None else lookup
+    return {
+        "id": f"token-{index}",
+        "surface": surface,
+        "base": surface,
+        "reading": hint.get("reading", ""),
+        "pos": hint.get("pos", "词语"),
+        "start": start,
+        "end": start + len(surface),
+        "lookup": bool(should_lookup),
+    }
+
+
+def enrich_tokens_with_jisho(tokens, max_terms=80):
+    unique_terms = []
+    for token in tokens:
+        surface = token.get("surface", "")
+        if not token.get("lookup") or token.get("reading") or not surface:
+            continue
+        if surface not in unique_terms:
+            unique_terms.append(surface)
+
+    skipped_count = max(0, len(unique_terms) - max_terms)
+    for term in unique_terms[:max_terms]:
+        entry = fetch_jisho_cached(term)
+        if not entry:
+            continue
+        japanese = choose_japanese(entry, term, term)
+        reading = to_hiragana(japanese.get("reading", ""))
+        senses = entry.get("senses") or []
+        pos = translate_pos((senses[0].get("parts_of_speech") or []) if senses else [])
+        for token in tokens:
+            if token.get("surface") == term:
+                if reading:
+                    token["reading"] = reading
+                if pos:
+                    token["pos"] = pos
+    return min(len(unique_terms), max_terms), skipped_count
+
+
+def fetch_jisho_cached(word):
+    if word not in JISHO_CACHE:
+        JISHO_CACHE[word] = fetch_jisho(word)
+    return JISHO_CACHE[word]
 
 
 def build_brief(ai_definition, memory_definition, has_openai_key):
@@ -299,6 +476,10 @@ def clean_mymemory_translation(text):
 
 def contains_kana(text):
     return any("ぁ" <= char <= "ゟ" or "ァ" <= char <= "ヿ" for char in text)
+
+
+def has_kanji(text):
+    return any("\u3400" <= char <= "\u9fff" or char in "々〆〤" for char in text)
 
 
 def normalize_compare(text):
