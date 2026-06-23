@@ -223,6 +223,9 @@ async function warmTokenizer() {
   if (isStaticDeployment()) {
     setDictionaryStatus(apiBaseUrl ? "后端词典待验证" : "静态版已就绪", true);
     if (apiBaseUrl) checkLookupApiStatus();
+    getTokenizer().catch(() => {
+      if (!apiBaseUrl) setDictionaryStatus("静态版内置分析", true);
+    });
     return;
   }
 
@@ -238,10 +241,6 @@ async function warmTokenizer() {
 }
 
 function getTokenizer() {
-  if (isStaticDeployment()) {
-    return Promise.reject(new Error("static deployment uses fallback tokenizer"));
-  }
-
   if (state.tokenizer) return Promise.resolve(state.tokenizer);
   if (state.tokenizerLoading) return state.tokenizerLoading;
 
@@ -254,7 +253,7 @@ function getTokenizer() {
             return;
           }
 
-        setDictionaryStatus("正在加载词典", false);
+        setDictionaryStatus("正在加载假名词典", false);
         window.kuromoji
           .builder({ dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/" })
           .build((error, tokenizer) => {
@@ -263,7 +262,7 @@ function getTokenizer() {
               return;
             }
             state.tokenizer = tokenizer;
-            setDictionaryStatus("分词词典已就绪", true);
+            setDictionaryStatus(apiBaseUrl && state.lookupApiOnline ? "假名词典 + 后端已连接" : "假名词典已就绪", true);
             resolve(tokenizer);
           });
         }),
@@ -276,7 +275,7 @@ function getTokenizer() {
   return state.tokenizerLoading;
 }
 
-function loadKuromojiLibrary(timeout = 3500) {
+function loadKuromojiLibrary(timeout = 12000) {
   if (window.kuromoji) return Promise.resolve();
   if (state.kuromojiScriptLoading) return state.kuromojiScriptLoading;
 
@@ -372,7 +371,7 @@ async function analyzeText() {
   }
 
   elements.analyzeButton.disabled = true;
-  elements.analysisStatus.textContent = "正在分析文本...";
+  elements.analysisStatus.textContent = isStaticDeployment() ? "正在加载假名词典并分析文本..." : "正在分析文本...";
   hideTooltip();
   closeDetailPanel();
 
