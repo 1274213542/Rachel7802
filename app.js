@@ -68,6 +68,8 @@ const elements = {
   colorSwatches: [...document.querySelectorAll("[data-highlight-color]")],
 };
 
+const apiBaseUrl = getConfiguredApiBaseUrl();
+
 const fallbackWordHints = {
   昨日: { reading: "きのう", pos: "名词", meaning: "昨天" },
   東京: { reading: "とうきょう", pos: "名词", meaning: "东京" },
@@ -218,7 +220,8 @@ function updateSourceSummary() {
 
 async function warmTokenizer() {
   if (isStaticDeployment()) {
-    setDictionaryStatus("静态版已就绪", true);
+    setDictionaryStatus(apiBaseUrl ? "后端词典待验证" : "静态版已就绪", true);
+    if (apiBaseUrl) checkLookupApiStatus();
     return;
   }
 
@@ -307,8 +310,10 @@ function setDictionaryStatus(text, ready) {
 
 function updateOnlineModeHint() {
   if (isStaticDeployment()) {
-    setDictionaryStatus("静态版已就绪", true);
-    elements.analysisStatus.textContent = "线上静态版可使用阅读、假名、收藏和标记；联网释义需要后端服务。";
+    setDictionaryStatus(apiBaseUrl ? "后端词典待验证" : "静态版已就绪", true);
+    elements.analysisStatus.textContent = apiBaseUrl
+      ? "已配置后端词典地址，正在验证连接。"
+      : "线上静态版可使用阅读、假名、收藏和标记；联网释义需要后端服务。";
     return;
   }
 
@@ -323,7 +328,37 @@ function isStaticDeployment() {
 }
 
 function hasLookupApi() {
-  return location.protocol.startsWith("http") && !isStaticDeployment();
+  return location.protocol.startsWith("http") && (!isStaticDeployment() || Boolean(apiBaseUrl));
+}
+
+function getConfiguredApiBaseUrl() {
+  const params = new URLSearchParams(location.search);
+  const fromQuery = normalizeApiBaseUrl(params.get("api"));
+  if (fromQuery) {
+    localStorage.setItem("japanese-reader-api-base-url", fromQuery);
+    return fromQuery;
+  }
+  return normalizeApiBaseUrl(localStorage.getItem("japanese-reader-api-base-url"));
+}
+
+function normalizeApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+async function checkLookupApiStatus() {
+  try {
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/status`, 5000);
+    if (!response.ok) throw new Error("status unavailable");
+    const payload = await response.json();
+    setDictionaryStatus(payload.online ? "后端词典已连接" : "后端词典异常", Boolean(payload.online));
+  } catch {
+    setDictionaryStatus("后端词典暂不可用", false);
+  }
+}
+
+function buildLookupApiUrl(params) {
+  const path = `/api/lookup?${params.toString()}`;
+  return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
 }
 
 async function analyzeText() {
@@ -1367,6 +1402,8 @@ async function fetchTrustedLookup(token) {
   const offlineBrief =
     location.protocol === "file:"
       ? "当前是 file:// 打开，无法连接在线查词"
+      : apiBaseUrl
+        ? "后端词典暂时不可用；已保留读音和词性信息。"
       : isStaticDeployment()
         ? staticBrief
         : "在线查词服务暂时不可用";
@@ -1383,6 +1420,8 @@ async function fetchTrustedLookup(token) {
     notices: [
       location.protocol === "file:"
         ? "当前是 file:// 打开，无法使用在线查词服务；请使用 http:// 局域网链接。"
+        : apiBaseUrl
+          ? "已配置后端词典地址，但本次请求没有成功；请确认后端服务正在运行。"
         : isStaticDeployment()
           ? "当前是 GitHub Pages 静态版。阅读、假名、收藏和标记可用；联网词典和例句需要单独部署后端服务。"
           : "在线查词服务暂时不可用。",
@@ -1402,7 +1441,7 @@ async function fetchTrustedLookup(token) {
       pos: token.pos || "",
       context: elements.sourceText.value || "",
     });
-    const response = await fetchWithTimeout(`/api/lookup?${params.toString()}`, 7000);
+    const response = await fetchWithTimeout(buildLookupApiUrl(params), 7000);
     if (!response.ok) return fallback;
     const payload = await response.json();
     return normalizeLookupPayload(token, payload);
