@@ -223,9 +223,6 @@ async function warmTokenizer() {
   if (isStaticDeployment()) {
     setDictionaryStatus(apiBaseUrl ? "后端词典待验证" : "静态版已就绪", true);
     if (apiBaseUrl) checkLookupApiStatus();
-    getTokenizer().catch(() => {
-      if (!apiBaseUrl) setDictionaryStatus("静态版内置分析", true);
-    });
     return;
   }
 
@@ -371,24 +368,33 @@ async function analyzeText() {
   }
 
   elements.analyzeButton.disabled = true;
-  elements.analysisStatus.textContent = isStaticDeployment() ? "正在加载假名词典并分析文本..." : "正在分析文本...";
+  elements.analysisStatus.textContent = hasLookupApi() ? "正在连接后端分析读音..." : "正在分析文本...";
   hideTooltip();
   closeDetailPanel();
 
   let tokens;
   try {
-    const tokenizer = await getTokenizer();
-    tokens = normalizeKuromojiTokens(text, tokenizer.tokenize(text));
+    tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
   } catch {
-    tokens = fallbackTokenize(text);
-    const statusText = apiBaseUrl
-      ? state.lookupApiOnline
-        ? "后端词典已连接"
-        : "后端词典待验证"
-      : isStaticDeployment()
-        ? "静态版内置分析"
-        : "使用备用分析";
-    setDictionaryStatus(statusText, Boolean(apiBaseUrl ? state.lookupApiOnline : isStaticDeployment()));
+    tokens = null;
+  }
+
+  if (!tokens) {
+    try {
+      elements.analysisStatus.textContent = isStaticDeployment() ? "正在加载假名词典并分析文本..." : "正在分析文本...";
+      const tokenizer = await getTokenizer();
+      tokens = normalizeKuromojiTokens(text, tokenizer.tokenize(text));
+    } catch {
+      tokens = fallbackTokenize(text);
+      const statusText = apiBaseUrl
+        ? state.lookupApiOnline
+          ? "后端词典已连接"
+          : "后端词典待验证"
+        : isStaticDeployment()
+          ? "静态版内置分析"
+          : "使用备用分析";
+      setDictionaryStatus(statusText, Boolean(apiBaseUrl ? state.lookupApiOnline : isStaticDeployment()));
+    }
   }
 
   state.lastText = text;
@@ -406,6 +412,46 @@ async function analyzeText() {
   elements.analysisStatus.textContent = lookupCount
     ? "分析完成。桌面端悬停查看，点击打开详情；手机端轻触显示或隐藏。"
     : "分析完成，但没有识别到包含汉字的词语。";
+}
+
+async function fetchBackendAnalysis(text) {
+  const response = await fetchWithTimeout(
+    `${apiBaseUrl}/api/analyze`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body: text,
+    },
+    60000,
+  );
+  if (!response.ok) throw new Error("backend analysis unavailable");
+  const payload = await response.json();
+  const tokens = normalizeBackendTokens(text, payload.tokens);
+  if (!tokens.length) throw new Error("backend analysis returned no tokens");
+  state.lookupApiOnline = true;
+  setDictionaryStatus("后端读音分析已连接", true);
+  return tokens;
+}
+
+function normalizeBackendTokens(text, rawTokens) {
+  if (!Array.isArray(rawTokens)) return [];
+  return rawTokens
+    .map((token, index) => {
+      const surface = String(token.surface || "");
+      const start = Number.isFinite(Number(token.start)) ? Number(token.start) : text.indexOf(surface);
+      const end = Number.isFinite(Number(token.end)) ? Number(token.end) : start + surface.length;
+      return {
+        id: token.id || `token-${index}`,
+        surface,
+        base: token.base || surface,
+        reading: token.reading || "",
+        pos: token.pos || "词语",
+        start: Math.max(0, start),
+        end: Math.max(start, end),
+        lookup: Boolean(token.lookup),
+      };
+    })
+    .filter((token) => token.surface && token.end > token.start);
 }
 
 function normalizeKuromojiTokens(text, rawTokens) {
@@ -1582,10 +1628,12 @@ function renderSources(sources) {
   `;
 }
 
-function fetchWithTimeout(url, timeout) {
+function fetchWithTimeout(url, optionsOrTimeout = {}, maybeTimeout) {
+  const options = typeof optionsOrTimeout === "number" ? {} : { ...optionsOrTimeout };
+  const timeout = typeof optionsOrTimeout === "number" ? optionsOrTimeout : maybeTimeout || 7000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
 function toggleFavorite(token, entry) {
