@@ -70,7 +70,7 @@ const elements = {
 };
 
 const DEFAULT_LOOKUP_API_BASE_URL = "https://japanese-reading-assistant-api.onrender.com";
-const ANALYSIS_CACHE_VERSION = "backend-analysis-v2";
+const ANALYSIS_CACHE_VERSION = "backend-analysis-v3";
 const apiBaseUrl = getConfiguredApiBaseUrl();
 
 const fallbackWordHints = {
@@ -485,11 +485,13 @@ function saveCachedAnalysis(text, tokens) {
         version: ANALYSIS_CACHE_VERSION,
         savedAt: new Date().toISOString(),
         text,
-        tokens: tokens.map(({ id, surface, base, reading, pos, start, end, lookup }) => ({
+        tokens: tokens.map(({ id, surface, base, reading, displayReading, rubySegments, pos, start, end, lookup }) => ({
           id,
           surface,
           base,
           reading,
+          displayReading,
+          rubySegments,
           pos,
           start,
           end,
@@ -518,6 +520,8 @@ function normalizeBackendTokens(text, rawTokens) {
         surface,
         base: token.base || surface,
         reading: token.reading || "",
+        displayReading: token.displayReading || getRubyDisplayReading(surface, token.reading || ""),
+        rubySegments: Array.isArray(token.rubySegments) ? token.rubySegments : buildRubySegments(surface, token.reading || ""),
         pos: token.pos || "词语",
         start: Math.max(0, start),
         end: Math.max(start, end),
@@ -538,6 +542,7 @@ function normalizeKuromojiTokens(text, rawTokens) {
 
     const base = token.basic_form && token.basic_form !== "*" ? token.basic_form : surface;
     const reading = token.reading && token.reading !== "*" ? kanaToHiragana(token.reading) : "";
+    const rubySegments = buildRubySegments(surface, reading);
     const pos = posLabels[token.pos] || token.pos || "词语";
     const lookup = hasKanji(surface) && token.pos !== "記号";
 
@@ -546,6 +551,8 @@ function normalizeKuromojiTokens(text, rawTokens) {
       surface,
       base,
       reading,
+      displayReading: getRubyDisplayReading(surface, reading, rubySegments),
+      rubySegments,
       pos,
       start,
       end,
@@ -623,11 +630,15 @@ function shouldSplitBefore(run, cursor, index) {
 
 function createFallbackToken(surface, start, index, lookup = hasKanji(surface)) {
   const hint = fallbackWordHints[surface] || {};
+  const reading = hint.reading || "";
+  const rubySegments = buildRubySegments(surface, reading);
   return {
     id: `token-${index}`,
     surface,
     base: surface,
-    reading: hint.reading || "",
+    reading,
+    displayReading: getRubyDisplayReading(surface, reading, rubySegments),
+    rubySegments,
     pos: hint.pos || "词语",
     start,
     end: start + surface.length,
@@ -657,7 +668,7 @@ function renderReader(text, tokens) {
       }
       if (shouldShowTokenReading(token)) {
         span.classList.add("with-reading");
-        span.dataset.reading = token.reading;
+        span.dataset.reading = getTokenAnnotationReading(token);
       }
       span.dataset.tokenId = token.id;
       span.tabIndex = 0;
@@ -719,24 +730,55 @@ function getHighlightColorForRange(start, end) {
 
 function renderTokenContent(span, token) {
   span.textContent = "";
-  span.textContent = token.surface;
   if (shouldShowTokenReading(token)) {
-    span.setAttribute("aria-label", `${token.surface} ${token.reading}`);
+    span.classList.add("has-ruby");
+    appendRubyTokenContent(span, token);
+    span.setAttribute("aria-label", `${token.surface} ${token.reading || getTokenAnnotationReading(token)}`);
   } else {
+    span.classList.remove("has-ruby");
+    span.textContent = token.surface;
     span.removeAttribute("aria-label");
     delete span.dataset.reading;
   }
 }
 
+function appendRubyTokenContent(span, token) {
+  const segments = Array.isArray(token.rubySegments) && token.rubySegments.length
+    ? token.rubySegments
+    : buildRubySegments(token.surface, token.reading || "");
+
+  segments.forEach((segment) => {
+    const text = String(segment.text || "");
+    const reading = String(segment.reading || "");
+    if (text && reading && hasKanji(text)) {
+      const ruby = document.createElement("ruby");
+      const rb = document.createElement("rb");
+      rb.textContent = text;
+      const rt = document.createElement("rt");
+      rt.textContent = reading;
+      ruby.append(rb, rt);
+      span.append(ruby);
+    } else if (text) {
+      span.append(document.createTextNode(text));
+    }
+  });
+}
+
 function shouldShowTokenReading(token) {
   return Boolean(
-    token?.reading &&
+    getTokenAnnotationReading(token) &&
       (state.showAllReadings || state.visibleReadingKeys.has(getReadingKey(token)) || state.savedReadingKeys.has(getReadingKey(token))),
   );
 }
 
 function getReadingKey(token) {
-  return `${token.surface}|${token.reading || ""}`;
+  return `${token.surface}|${getTokenAnnotationReading(token)}`;
+}
+
+function getTokenAnnotationReading(token) {
+  if (!token) return "";
+  if (token.displayReading) return token.displayReading;
+  return getRubyDisplayReading(token.surface || "", token.reading || "", token.rubySegments);
 }
 
 function applyTokenReadingState(tokenId) {
@@ -747,7 +789,7 @@ function applyTokenReadingState(tokenId) {
   const showReading = shouldShowTokenReading(token);
   tokenElement.classList.toggle("with-reading", showReading);
   if (showReading) {
-    tokenElement.dataset.reading = token.reading;
+    tokenElement.dataset.reading = getTokenAnnotationReading(token);
   } else {
     delete tokenElement.dataset.reading;
   }
@@ -756,7 +798,7 @@ function applyTokenReadingState(tokenId) {
 
 function showSingleReading(tokenId) {
   const token = state.tokens.get(tokenId);
-  if (!token?.reading) return;
+  if (!getTokenAnnotationReading(token)) return;
   state.visibleReadingKeys.add(getReadingKey(token));
   applyTokenReadingState(tokenId);
 }
@@ -789,7 +831,7 @@ function hideSingleReading(tokenId) {
 
 function toggleSavedReading(tokenId) {
   const token = state.tokens.get(tokenId);
-  if (!token?.reading) return;
+  if (!getTokenAnnotationReading(token)) return;
   const key = getReadingKey(token);
   if (state.savedReadingKeys.has(key)) {
     state.savedReadingKeys.delete(key);
@@ -804,7 +846,7 @@ function toggleSavedReading(tokenId) {
 
 function saveReading(tokenId) {
   const token = state.tokens.get(tokenId);
-  if (!token?.reading) return;
+  if (!getTokenAnnotationReading(token)) return;
   const key = getReadingKey(token);
   state.savedReadingKeys.add(key);
   state.visibleReadingKeys.add(key);
@@ -832,7 +874,7 @@ function toggleAllReadings() {
 
 function updateAllReadingsButton() {
   const hasCurrentAnalysis = state.lastText && elements.sourceText.value.trim() === state.lastText;
-  const hasReadableTokens = state.lastTokens.some((token) => token.lookup && token.reading);
+  const hasReadableTokens = state.lastTokens.some((token) => token.lookup && getTokenAnnotationReading(token));
   elements.allReadingsButton.disabled = !(hasCurrentAnalysis && hasReadableTokens);
   elements.allReadingsButton.textContent = state.showAllReadings ? "隐藏全部假名" : "显示全部假名";
   elements.allReadingsButton.classList.toggle("saved-text", state.showAllReadings);
@@ -1341,7 +1383,7 @@ function renderTooltip(entry, tokenId) {
   const actions = document.createElement("div");
   actions.className = "tooltip-actions";
 
-  if (token?.reading) {
+  if (getTokenAnnotationReading(token)) {
     const isSavedReading = state.savedReadingKeys.has(getReadingKey(token));
     const saveReadingButton = document.createElement("button");
     saveReadingButton.type = "button";
@@ -1999,6 +2041,75 @@ function containsKana(text) {
 
 function isKanjiChar(char) {
   return /[\u3400-\u9fff々〆〤]/.test(char);
+}
+
+function buildRubySegments(surface, reading) {
+  const word = String(surface || "");
+  const hiraganaReading = kanaToHiragana(String(reading || ""));
+  if (!word || !hiraganaReading || !hasKanji(word)) return [{ text: word }];
+
+  const chunks = splitKanaKanjiChunks(word);
+  const segments = [];
+  let readingIndex = 0;
+
+  chunks.forEach((chunk, chunkIndex) => {
+    if (chunk.kind === "kana") {
+      const kana = kanaToHiragana(chunk.text);
+      if (hiraganaReading.startsWith(kana, readingIndex)) {
+        readingIndex += kana.length;
+      }
+      segments.push({ text: chunk.text });
+      return;
+    }
+
+    let nextKana = "";
+    for (let index = chunkIndex + 1; index < chunks.length; index += 1) {
+      if (chunks[index].kind === "kana") {
+        nextKana = kanaToHiragana(chunks[index].text);
+        break;
+      }
+    }
+
+    let nextIndex = hiraganaReading.length;
+    let chunkReading = hiraganaReading.slice(readingIndex);
+    if (nextKana) {
+      const foundAt = hiraganaReading.indexOf(nextKana, readingIndex);
+      if (foundAt >= readingIndex) {
+        nextIndex = foundAt;
+        chunkReading = hiraganaReading.slice(readingIndex, nextIndex);
+      } else {
+        nextIndex = readingIndex;
+        chunkReading = "";
+      }
+    }
+
+    segments.push(chunkReading ? { text: chunk.text, reading: chunkReading } : { text: chunk.text });
+    readingIndex = nextIndex;
+  });
+
+  return segments;
+}
+
+function splitKanaKanjiChunks(text) {
+  const chunks = [];
+  let current = "";
+  let currentKind = "";
+  [...String(text || "")].forEach((char) => {
+    const kind = isKanjiChar(char) ? "kanji" : containsKana(char) ? "kana" : "other";
+    if (current && kind !== currentKind) {
+      chunks.push({ kind: currentKind, text: current });
+      current = "";
+    }
+    current += char;
+    currentKind = kind;
+  });
+  if (current) chunks.push({ kind: currentKind, text: current });
+  return chunks;
+}
+
+function getRubyDisplayReading(surface, reading, existingSegments = null) {
+  const segments = Array.isArray(existingSegments) && existingSegments.length ? existingSegments : buildRubySegments(surface, reading);
+  return segments.map((segment) => segment.reading || "").join("");
 }
 
 function kanaToHiragana(text) {
