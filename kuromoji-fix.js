@@ -8,9 +8,9 @@
       checkLookupApiStatus();
     }
 
-    getTokenizer().catch(() => {
-      setDictionaryStatus(apiBaseUrl ? "本地假名词典加载失败，后端待验证" : "使用备用分析", false);
-    });
+    if (!apiBaseUrl) {
+      setDictionaryStatus("假名词典待加载", true);
+    }
   };
 
   getTokenizer = function getTokenizer() {
@@ -55,17 +55,17 @@
 
   updateOnlineModeHint = function updateOnlineModeHint() {
     if (isStaticDeployment()) {
-      setDictionaryStatus("正在加载假名词典", true);
+      setDictionaryStatus("假名词典待加载", true);
       elements.analysisStatus.textContent = apiBaseUrl
-        ? "读音会优先使用浏览器假名词典；详细释义和例句会连接后端。"
+        ? "页面已可操作；第一次分析时会加载假名词典，详细释义和例句会连接后端。"
         : "线上静态版可使用阅读、假名、收藏和标记；联网释义需要后端服务。";
       return;
     }
 
     if (location.protocol === "file:") {
       if (apiBaseUrl) {
-        setDictionaryStatus("正在加载假名词典", true);
-        elements.analysisStatus.textContent = "当前是本地文件页，读音优先使用浏览器假名词典；详细释义会连接线上后端。";
+        setDictionaryStatus("假名词典待加载", true);
+        elements.analysisStatus.textContent = "当前是本地文件页；第一次分析时会加载假名词典，详细释义会连接线上后端。";
       } else {
         setDictionaryStatus("请使用 http 链接", false);
         elements.analysisStatus.textContent = "当前是本地文件模式，无法使用在线查词；请打开局域网 http 链接。";
@@ -82,13 +82,13 @@
       if (state.tokenizerReady) {
         setDictionaryStatus(payload.online ? "假名词典已就绪，后端释义已连接" : "假名词典已就绪，后端释义异常", true);
       } else {
-        setDictionaryStatus(payload.online ? "后端释义已连接，正在加载假名词典" : "后端词典异常", Boolean(payload.online));
+        setDictionaryStatus(payload.online ? "后端释义已连接，假名词典待加载" : "后端词典异常", Boolean(payload.online));
       }
     } catch {
       state.lookupApiOnline = false;
       setDictionaryStatus(
-        state.tokenizerReady ? "假名词典已就绪，后端释义暂不可用" : "正在加载假名词典",
-        Boolean(state.tokenizerReady),
+        state.tokenizerReady ? "假名词典已就绪，后端释义暂不可用" : "假名词典待加载",
+        true,
       );
     }
   };
