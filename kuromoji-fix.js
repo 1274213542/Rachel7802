@@ -1,7 +1,22 @@
 (() => {
   const PATCH_CACHE_VERSION = "frontend-kuromoji-ruby-v4";
+  const PATCH_FALLBACK_HINTS = {
+    変形: { reading: "へんけい", pos: "名词 / サ变动词", meaning: "变形；改变形状" },
+    使っ: { reading: "つか", pos: "动词", meaning: "使用" },
+    使う: { reading: "つかう", pos: "动词", meaning: "使用" },
+    例文: { reading: "れいぶん", pos: "名词", meaning: "例句" },
+    新しい: { reading: "あたらしい", pos: "い形容词", meaning: "新的" },
+    資料: { reading: "しりょう", pos: "名词", meaning: "资料" },
+    確認: { reading: "かくにん", pos: "名词 / サ变动词", meaning: "确认" },
+    長い: { reading: "ながい", pos: "い形容词", meaning: "长的" },
+    読み方: { reading: "よみかた", pos: "名词", meaning: "读法" },
+    取り扱い: { reading: "とりあつかい", pos: "名词", meaning: "处理；操作；对待" },
+    説明: { reading: "せつめい", pos: "名词 / サ变动词", meaning: "说明" },
+  };
 
   state.tokenizerReady = false;
+  Object.assign(fallbackWordHints, PATCH_FALLBACK_HINTS);
+  fallbackWordsByLength.splice(0, fallbackWordsByLength.length, ...Object.keys(fallbackWordHints).sort((a, b) => b.length - a.length));
 
   warmTokenizer = function warmTokenizer() {
     if (apiBaseUrl) {
@@ -107,6 +122,7 @@
 
     let tokens;
     let usedAnalysisCache = false;
+    let tokenizerFailed = false;
     tokens = loadCachedAnalysis(text);
     if (tokens) {
       usedAnalysisCache = true;
@@ -115,10 +131,11 @@
 
     try {
       if (!tokens) {
-        const tokenizer = await getTokenizer();
+        const tokenizer = await withPatchTimeout(getTokenizer(), isStaticDeployment() ? 12000 : 18000);
         tokens = normalizeKuromojiTokens(text, tokenizer.tokenize(text));
       }
     } catch {
+      tokenizerFailed = true;
       tokens = tokens || null;
     }
 
@@ -127,6 +144,9 @@
         elements.analysisStatus.textContent = hasLookupApi() ? "本地假名词典失败，正在尝试后端分析..." : "正在分析文本...";
         tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
         if (!tokens) throw new Error("no backend analysis");
+        if (tokenizerFailed) {
+          tokens = chooseMoreReadablePatchTokens(tokens, fallbackTokenize(text));
+        }
       } catch {
         tokens = fallbackTokenize(text);
         const statusText = apiBaseUrl
@@ -204,6 +224,78 @@
   getAnalysisCacheKey = function getAnalysisCacheKey(text) {
     return `japanese-reader-analysis:${PATCH_CACHE_VERSION}:${getTextFavoriteKey(text)}`;
   };
+
+  buildRubySegments = function buildRubySegments(surface, reading) {
+    const word = String(surface || "");
+    const hiraganaReading = kanaToHiragana(String(reading || ""));
+    if (!word || !hiraganaReading || !hasKanji(word)) return [{ text: word }];
+
+    const chunks = splitKanaKanjiChunks(word);
+    const segments = [];
+    let readingIndex = 0;
+
+    chunks.forEach((chunk, chunkIndex) => {
+      if (chunk.kind === "kana") {
+        const kana = kanaToHiragana(chunk.text);
+        if (hiraganaReading.startsWith(kana, readingIndex)) {
+          readingIndex += kana.length;
+        }
+        segments.push({ text: chunk.text });
+        return;
+      }
+
+      let nextKana = "";
+      for (let index = chunkIndex + 1; index < chunks.length; index += 1) {
+        if (chunks[index].kind === "kana") {
+          nextKana = kanaToHiragana(chunks[index].text);
+          break;
+        }
+      }
+
+      let nextIndex = hiraganaReading.length;
+      let chunkReading = hiraganaReading.slice(readingIndex);
+      if (nextKana) {
+        const foundAt = hiraganaReading.indexOf(nextKana, readingIndex);
+        if (foundAt >= readingIndex) {
+          nextIndex = foundAt;
+          chunkReading = hiraganaReading.slice(readingIndex, nextIndex);
+        } else {
+          nextIndex = hiraganaReading.length;
+          chunkReading = hiraganaReading.slice(readingIndex);
+        }
+      }
+
+      segments.push(chunkReading ? { text: chunk.text, reading: chunkReading } : { text: chunk.text });
+      readingIndex = nextIndex;
+    });
+
+    return segments;
+  };
+
+  function withPatchTimeout(promise, timeout) {
+    return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error("timeout")), timeout);
+      promise.then(
+        (value) => {
+          window.clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          window.clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  function chooseMoreReadablePatchTokens(primaryTokens, fallbackTokens) {
+    return countReadablePatchTokens(fallbackTokens) > countReadablePatchTokens(primaryTokens) ? fallbackTokens : primaryTokens;
+  }
+
+  function countReadablePatchTokens(tokens) {
+    if (!Array.isArray(tokens)) return 0;
+    return tokens.filter((token) => token.lookup && getRubyDisplayReading(token.surface || "", token.reading || "", token.rubySegments)).length;
+  }
 
   function hideTemporaryReadingForMobileToken(token) {
     if (!token || state.showAllReadings) return;
