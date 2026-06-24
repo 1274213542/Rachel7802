@@ -204,4 +204,40 @@
   getAnalysisCacheKey = function getAnalysisCacheKey(text) {
     return `japanese-reader-analysis:${PATCH_CACHE_VERSION}:${getTextFavoriteKey(text)}`;
   };
+
+  function hideTemporaryReadingForMobileToken(token) {
+    if (!token || state.showAllReadings) return;
+    const key = getReadingKey(token);
+    if (state.savedReadingKeys.has(key)) return;
+    state.visibleReadingKeys.delete(key);
+    applyTokenReadingState(token.id);
+  }
+
+  handleTokenClick = function handleTokenClick(event) {
+    if (state.isEditingReader) return;
+    const tokenElement = event.target.closest(".lookup-token");
+    if (!tokenElement) return;
+    event.stopPropagation();
+
+    const tokenId = tokenElement.dataset.tokenId;
+    const token = state.tokens.get(tokenId);
+    if (isTouchMode() && state.mobileOpenTokenId === tokenId && elements.tooltip.classList.contains("visible")) {
+      state.mobileOpenTokenId = null;
+      cancelTooltipHide();
+      hideTooltip();
+      clearActiveTokens();
+      hideTemporaryReadingForMobileToken(token);
+      return;
+    }
+
+    clearTemporaryReadings(tokenId);
+    showSingleReading(tokenId);
+    state.editStartOffset = token?.start || 0;
+    state.mobileOpenTokenId = tokenId;
+    showTooltipForElement(tokenElement);
+
+    if (isTouchMode()) {
+      return;
+    }
+  };
 })();
