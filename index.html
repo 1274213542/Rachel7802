@@ -27,7 +27,6 @@
           <div class="section-heading">
             <div>
               <h2 id="inputTitle">输入文本</h2>
-              <p>粘贴日语文本后，系统会标记包含汉字的词语。</p>
             </div>
             <div class="input-header-actions">
               <button class="text-button" id="sourceToggleButton" type="button">收起输入</button>
@@ -41,7 +40,7 @@
               <button class="primary-button" id="analyzeButton" type="button">分析文本</button>
               <button class="ghost-button" id="saveTextButton" type="button">收藏本文</button>
             </div>
-            <span id="analysisStatus" class="muted-status">桌面端悬停查看，点击打开详细解释；手机端轻触显示或隐藏注释。</span>
+            <span id="analysisStatus" class="muted-status">待分析</span>
           </div>
         </section>
 
@@ -49,7 +48,6 @@
           <div class="section-heading">
             <div>
               <h2 id="readerTitle">阅读区</h2>
-              <p>原文保持干净显示，注释只在交互时出现。</p>
             </div>
             <div class="reader-actions">
               <button class="ghost-button compact-button source-dock-button" id="sourceDockButton" type="button">源文本</button>
@@ -59,7 +57,7 @@
             </div>
           </div>
           <article id="reader" class="reader empty">
-            <p>点击“分析文本”后，这里会显示可查词的日语原文。</p>
+            <p>待分析</p>
           </article>
         </section>
       </main>
@@ -67,7 +65,7 @@
       <aside id="detailPanel" class="detail-panel" aria-live="polite" aria-hidden="true">
         <button class="icon-button close-detail" id="closeDetailButton" type="button" aria-label="关闭详情">×</button>
         <div id="detailContent" class="detail-content">
-          <p class="empty-detail">点击一个词语后，这里会显示词典式解释。</p>
+          <p class="empty-detail">未选择词语</p>
         </div>
       </aside>
     </div>
@@ -99,7 +97,6 @@
           <label class="setting-row" for="fontSizeRange">
             <span>
               <strong>文字大小</strong>
-              <small>调整阅读区里的日语正文大小</small>
             </span>
             <output id="fontSizeValue">20px</output>
           </label>
@@ -108,7 +105,6 @@
           <label class="setting-row" for="lineHeightRange">
             <span>
               <strong>行距</strong>
-              <small>调整正文行与行之间的距离</small>
             </span>
             <output id="lineHeightValue">2.05</output>
           </label>
