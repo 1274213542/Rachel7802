@@ -406,7 +406,7 @@ async function analyzeText() {
   tokens = loadCachedAnalysis(text);
   if (tokens) {
     usedAnalysisCache = true;
-    setDictionaryStatus("已使用本地分析缓存", true);
+    setDictionaryStatus("可用", true);
   }
 
   if (!tokens && hasLookupApi()) {
@@ -449,8 +449,8 @@ async function analyzeText() {
           ? "可用"
           : "备用分析"
         : isStaticDeployment()
-          ? "静态版内置分析"
-          : "使用备用分析";
+          ? "备用分析"
+          : "备用分析";
       setDictionaryStatus(statusText, Boolean(apiBaseUrl ? state.lookupApiOnline : isStaticDeployment()));
     }
   }
@@ -470,7 +470,7 @@ async function analyzeText() {
   collapseSourcePanel();
   elements.analysisStatus.textContent = lookupCount
     ? usedAnalysisCache
-      ? "已从缓存完成分析。"
+      ? "分析完成。"
       : "分析完成。"
     : "分析完成，但没有识别到包含汉字的词语。";
 }
