@@ -1,5 +1,5 @@
 (() => {
-  const PATCH_CACHE_VERSION = "frontend-kuromoji-ruby-v4";
+  const PATCH_CACHE_VERSION = "backend-janome-ruby-v1";
   const PATCH_FALLBACK_HINTS = {
     変形: { reading: "へんけい", pos: "名词 / サ变动词", meaning: "变形；改变形状" },
     使っ: { reading: "つか", pos: "动词", meaning: "使用" },
@@ -116,7 +116,7 @@
     }
 
     elements.analyzeButton.disabled = true;
-    elements.analysisStatus.textContent = "正在加载假名词典并分析文本...";
+    elements.analysisStatus.textContent = "正在使用完整词典分析文本...";
     hideTooltip();
     closeDetailPanel();
 
@@ -129,13 +129,17 @@
       setDictionaryStatus("已使用本地分析缓存", true);
     }
 
-    if (!tokens && isStaticDeployment()) {
-      tokens = fallbackTokenize(text);
-      setDictionaryStatus("静态版轻量分析", true);
+    if (!tokens && hasLookupApi()) {
+      try {
+        elements.analysisStatus.textContent = "正在连接后端完整词典分析文本...";
+        tokens = await fetchBackendAnalysis(text);
+      } catch {
+        tokens = null;
+      }
     }
 
     try {
-      if (!tokens) {
+      if (!tokens && !isStaticDeployment()) {
         const tokenizer = await withPatchTimeout(getTokenizer(), isStaticDeployment() ? 12000 : 18000);
         tokens = normalizeKuromojiTokens(text, tokenizer.tokenize(text));
       }
@@ -152,7 +156,7 @@
 
     if (!tokens) {
       try {
-        elements.analysisStatus.textContent = hasLookupApi() ? "本地假名词典失败，正在尝试后端分析..." : "正在分析文本...";
+        elements.analysisStatus.textContent = hasLookupApi() ? "正在尝试后端完整词典分析..." : "正在分析文本...";
         tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
         if (!tokens) throw new Error("no backend analysis");
         if (tokenizerFailed) {
