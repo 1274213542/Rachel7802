@@ -24,7 +24,7 @@
     }
 
     if (!apiBaseUrl) {
-      setDictionaryStatus("假名词典待加载", true);
+      setDictionaryStatus("准备中", true);
     }
   };
 
@@ -41,7 +41,7 @@
               return;
             }
 
-            setDictionaryStatus("正在加载假名词典", false);
+            setDictionaryStatus("准备中", false);
             window.kuromoji
               .builder({ dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/" })
               .build((error, tokenizer) => {
@@ -52,7 +52,7 @@
                 state.tokenizer = tokenizer;
                 state.tokenizerReady = true;
                 setDictionaryStatus(
-                  apiBaseUrl && state.lookupApiOnline ? "假名词典已就绪，后端释义已连接" : "假名词典已就绪",
+                  apiBaseUrl && state.lookupApiOnline ? "可用" : "可用",
                   true,
                 );
                 resolve(tokenizer);
@@ -70,17 +70,17 @@
 
   updateOnlineModeHint = function updateOnlineModeHint() {
     if (isStaticDeployment()) {
-      setDictionaryStatus("假名词典待加载", true);
+      setDictionaryStatus("准备中", true);
       elements.analysisStatus.textContent = apiBaseUrl
-        ? "后端连接中"
+        ? "连接中"
         : "待分析";
       return;
     }
 
     if (location.protocol === "file:") {
       if (apiBaseUrl) {
-        setDictionaryStatus("假名词典待加载", true);
-        elements.analysisStatus.textContent = "后端连接中";
+        setDictionaryStatus("准备中", true);
+        elements.analysisStatus.textContent = "连接中";
       } else {
         setDictionaryStatus("请使用 http 链接", false);
         elements.analysisStatus.textContent = "请使用 http 链接";
@@ -95,14 +95,14 @@
       const payload = await response.json();
       state.lookupApiOnline = Boolean(payload.online);
       if (state.tokenizerReady) {
-        setDictionaryStatus(payload.online ? "假名词典已就绪，后端释义已连接" : "假名词典已就绪，后端释义异常", true);
+        setDictionaryStatus(payload.online ? "可用" : "部分可用", true);
       } else {
-        setDictionaryStatus(payload.online ? "后端释义已连接，假名词典待加载" : "后端词典异常", Boolean(payload.online));
+        setDictionaryStatus(payload.online ? "可用" : "异常", Boolean(payload.online));
       }
     } catch {
       state.lookupApiOnline = false;
       setDictionaryStatus(
-        state.tokenizerReady ? "假名词典已就绪，后端释义暂不可用" : "假名词典待加载",
+        state.tokenizerReady ? "部分可用" : "准备中",
         true,
       );
     }
@@ -166,7 +166,7 @@
         tokens = fallbackTokenize(text);
         const statusText = apiBaseUrl
           ? state.lookupApiOnline
-            ? "后端释义已连接，本地假名词典失败"
+            ? "可用"
             : "使用备用分析，后端暂不可用"
           : isStaticDeployment()
             ? "静态版内置分析"
