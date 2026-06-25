@@ -309,8 +309,12 @@ textarea:focus {
 .ghost-button,
 .text-button,
 .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: var(--radius);
+  line-height: 1;
   transition: background 160ms ease, color 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
