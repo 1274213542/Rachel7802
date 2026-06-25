@@ -26,6 +26,8 @@ const state = {
   settings: {
     fontSize: 20,
     lineHeight: 2.05,
+    rubySize: 0.42,
+    rubyColor: "#5f8f89",
   },
 };
 
@@ -61,6 +63,10 @@ const elements = {
   fontSizeValue: document.querySelector("#fontSizeValue"),
   lineHeightRange: document.querySelector("#lineHeightRange"),
   lineHeightValue: document.querySelector("#lineHeightValue"),
+  rubySizeRange: document.querySelector("#rubySizeRange"),
+  rubySizeValue: document.querySelector("#rubySizeValue"),
+  rubyColorInput: document.querySelector("#rubyColorInput"),
+  rubyColorValue: document.querySelector("#rubyColorValue"),
   resetSettingsButton: document.querySelector("#resetSettingsButton"),
   favoritesButton: document.querySelector("#favoritesButton"),
   favoritesDrawer: document.querySelector("#favoritesDrawer"),
@@ -72,6 +78,13 @@ const elements = {
 
 const DEFAULT_LOOKUP_API_BASE_URL = "https://japanese-reading-assistant-api.onrender.com";
 const ANALYSIS_CACHE_VERSION = "backend-janome-ruby-v1";
+const LOOKUP_FAST_TIMEOUT_MS = 1800;
+const DEFAULT_READER_SETTINGS = Object.freeze({
+  fontSize: 20,
+  lineHeight: 2.05,
+  rubySize: 0.42,
+  rubyColor: "#5f8f89",
+});
 const apiBaseUrl = getConfiguredApiBaseUrl();
 
 const fallbackWordHints = {
@@ -153,6 +166,8 @@ function bindEvents() {
   elements.settingsBackdrop.addEventListener("click", closeSettings);
   elements.fontSizeRange.addEventListener("input", updateFontSize);
   elements.lineHeightRange.addEventListener("input", updateLineHeight);
+  elements.rubySizeRange.addEventListener("input", updateRubySize);
+  elements.rubyColorInput.addEventListener("input", updateRubyColor);
   elements.resetSettingsButton.addEventListener("click", resetSettings);
   elements.favoritesButton.addEventListener("click", openFavorites);
   elements.closeFavoritesButton.addEventListener("click", closeFavorites);
@@ -396,7 +411,7 @@ async function analyzeText() {
   }
 
   elements.analyzeButton.disabled = true;
-  elements.analysisStatus.textContent = "正在使用完整词典分析文本...";
+  elements.analysisStatus.textContent = "正在分析...";
   hideTooltip();
   closeDetailPanel();
 
@@ -1430,11 +1445,11 @@ async function showTooltipForElement(tokenElement) {
   state.activeTokenId = tokenElement.dataset.tokenId;
   const token = state.tokens.get(state.activeTokenId);
   positionTooltip(tokenElement);
-  renderTooltip({ reading: token.reading || "读音查询中", brief: "正在查询释义..." }, state.activeTokenId);
+  renderTooltip(buildLocalLookupEntry(token), state.activeTokenId);
   elements.tooltip.classList.add("visible");
   elements.tooltip.setAttribute("aria-hidden", "false");
 
-  const entry = await lookupWord(token);
+  const entry = await lookupWord(token, { timeout: LOOKUP_FAST_TIMEOUT_MS });
   if (state.activeTokenId === token.id || state.mobileOpenTokenId === token.id) {
     renderTooltip(entry, token.id);
     positionTooltip(tokenElement);
@@ -1562,8 +1577,8 @@ async function openDetail(tokenId) {
   const token = state.tokens.get(tokenId);
   if (!token) return;
   elements.detailPanel.setAttribute("aria-hidden", "false");
-  renderDetailLoading(token);
-  const entry = await lookupWord(token);
+  renderDetail(token, buildLocalLookupEntry(token));
+  const entry = await lookupWord(token, { timeout: LOOKUP_FAST_TIMEOUT_MS });
   renderDetail(token, entry);
 }
 
@@ -1595,6 +1610,7 @@ function renderDetail(token, entry) {
   const examples = entry.examples || [];
   const notices = entry.notices || [];
   const sources = entry.sources || [];
+  const sourceTag = entry.status === "local_quick" || entry.status === "local_reading_only" ? "快速结果" : "在线来源";
   elements.detailContent.innerHTML = `
     <div class="detail-title-row">
       <div>
@@ -1608,7 +1624,7 @@ function renderDetail(token, entry) {
     <div class="word-meta">
       <span class="tag">${escapeHtml(entry.pos || token.pos || "词语")}</span>
       <span class="tag">基本形：${escapeHtml(token.base || token.surface)}</span>
-      <span class="tag">在线来源</span>
+      <span class="tag">${escapeHtml(sourceTag)}</span>
       ${entry.aiDefinition ? `<span class="tag ai-tag">AI辅助</span>` : ""}
       ${entry.memoryDefinition ? `<span class="tag memory-tag">翻译记忆</span>` : ""}
     </div>
@@ -1638,49 +1654,19 @@ function renderDetail(token, entry) {
   document.querySelector("#favoriteToggle").addEventListener("click", () => toggleFavorite(token, entry));
 }
 
-async function lookupWord(token) {
+async function lookupWord(token, options = {}) {
   const key = token.base || token.surface;
   if (state.lookupCache.has(key)) return state.lookupCache.get(key);
-  const entry = await fetchTrustedLookup(token);
-  state.lookupCache.set(key, entry);
+  const entry = await fetchTrustedLookup(token, options);
+  if (entry.status !== "offline_or_unavailable" && entry.status !== "local_quick") {
+    state.lookupCache.set(key, entry);
+  }
   return entry;
 }
 
-async function fetchTrustedLookup(token) {
-  const localHint = fallbackWordHints[token.surface] || fallbackWordHints[token.base] || {};
-  const staticBrief = localHint.meaning || "线上静态版未连接后端词典；已保留读音和词性信息。";
-  const offlineBrief =
-    location.protocol === "file:"
-      ? "当前是 file:// 打开，无法连接在线查词"
-      : apiBaseUrl
-        ? "后端词典暂时不可用；已保留读音和词性信息。"
-      : isStaticDeployment()
-        ? staticBrief
-        : "在线查词服务暂时不可用";
-  const fallback = {
-    word: token.surface,
-    reading: token.reading || localHint.reading || "",
-    pos: token.pos || localHint.pos || "词语",
-    brief: offlineBrief,
-    status: "offline_or_unavailable",
-    chineseDefinitions: localHint.meaning ? [localHint.meaning] : [],
-    referenceDefinitions: [],
-    examples: [],
-    grammar: isStaticDeployment() ? "线上静态版暂不提供可靠语法说明；启用后端后可显示更完整解释。" : "暂无可靠语法说明来源。",
-    notices: [
-      location.protocol === "file:"
-        ? "当前是 file:// 打开，无法使用在线查词服务；请使用 http:// 局域网链接。"
-        : apiBaseUrl
-          ? "已配置后端词典地址，但本次请求没有成功；请确认后端服务正在运行。"
-        : isStaticDeployment()
-          ? "当前是 GitHub Pages 静态版。阅读、假名、收藏和标记可用；联网词典和例句需要单独部署后端服务。"
-          : "在线查词服务暂时不可用。",
-    ],
-    sources: [],
-    aiDefinition: null,
-    memoryDefinition: null,
-  };
-
+async function fetchTrustedLookup(token, options = {}) {
+  const timeout = options.timeout || LOOKUP_FAST_TIMEOUT_MS;
+  const fallback = buildLocalLookupEntry(token);
   if (!hasLookupApi()) return fallback;
 
   try {
@@ -1691,13 +1677,38 @@ async function fetchTrustedLookup(token) {
       pos: token.pos || "",
       context: elements.sourceText.value || "",
     });
-    const response = await fetchWithTimeout(buildLookupApiUrl(params), apiBaseUrl ? 60000 : 7000);
+    const response = await fetchWithTimeout(buildLookupApiUrl(params), timeout);
     if (!response.ok) return fallback;
     const payload = await response.json();
     return normalizeLookupPayload(token, payload);
   } catch {
     return fallback;
   }
+}
+
+function buildLocalLookupEntry(token) {
+  const localHint = fallbackWordHints[token.surface] || fallbackWordHints[token.base] || {};
+  const reading = token.reading || localHint.reading || "";
+  const pos = token.pos || localHint.pos || "词语";
+  const brief = localHint.meaning || [reading, pos].filter(Boolean).join(" / ") || "暂无简短释义";
+
+  return {
+    word: token.surface,
+    reading,
+    pos,
+    brief,
+    status: localHint.meaning ? "local_quick" : "local_reading_only",
+    chineseDefinitions: localHint.meaning
+      ? [{ language: "zh-CN", text: localHint.meaning, source: "本地速查", kind: "local" }]
+      : [],
+    referenceDefinitions: [],
+    examples: [],
+    grammar: pos ? `词性：${pos}` : "暂无可靠语法说明来源。",
+    notices: localHint.meaning ? ["已优先显示快速释义。"] : ["已优先显示读音和词性。"],
+    sources: [],
+    aiDefinition: null,
+    memoryDefinition: null,
+  };
 }
 
 function normalizeLookupPayload(token, payload) {
@@ -1719,7 +1730,8 @@ function normalizeLookupPayload(token, payload) {
 }
 
 function getBriefText(entry) {
-  const chineseDefinition = entry.chineseDefinitions?.[0]?.text;
+  const firstDefinition = entry.chineseDefinitions?.[0];
+  const chineseDefinition = typeof firstDefinition === "string" ? firstDefinition : firstDefinition?.text;
   if (chineseDefinition) return chineseDefinition;
   return entry.brief || "暂无可靠中文释义";
 }
@@ -1741,8 +1753,8 @@ function renderChineseDefinitions(definitions, entry) {
         .map(
           (item) => `
             <li>
-              <p>${escapeHtml(item.text)}</p>
-              <p class="detail-note">来源：${escapeHtml(item.source || "未标明")}</p>
+              <p>${escapeHtml(typeof item === "string" ? item : item.text)}</p>
+              <p class="detail-note">来源：${escapeHtml(typeof item === "string" ? "本地速查" : item.source || "未标明")}</p>
             </li>
           `,
         )
@@ -1948,10 +1960,14 @@ function loadSettings() {
   try {
     const raw = localStorage.getItem("japanese-reader-settings");
     const saved = raw ? JSON.parse(raw) : {};
-    state.settings.fontSize = clampNumber(saved.fontSize, 16, 30, 20);
-    state.settings.lineHeight = clampNumber(saved.lineHeight, 1.55, 2.5, 2.05);
+    state.settings = {
+      fontSize: clampNumber(saved.fontSize, 16, 30, DEFAULT_READER_SETTINGS.fontSize),
+      lineHeight: clampNumber(saved.lineHeight, 1.55, 2.5, DEFAULT_READER_SETTINGS.lineHeight),
+      rubySize: clampNumber(saved.rubySize, 0.28, 0.75, DEFAULT_READER_SETTINGS.rubySize),
+      rubyColor: normalizeColor(saved.rubyColor, DEFAULT_READER_SETTINGS.rubyColor),
+    };
   } catch {
-    state.settings = { fontSize: 20, lineHeight: 2.05 };
+    state.settings = { ...DEFAULT_READER_SETTINGS };
   }
 
   applyReaderSettings();
@@ -1964,10 +1980,16 @@ function saveSettings() {
 function applyReaderSettings() {
   document.documentElement.style.setProperty("--reader-font-size", `${state.settings.fontSize}px`);
   document.documentElement.style.setProperty("--reader-line-height", String(state.settings.lineHeight));
+  document.documentElement.style.setProperty("--reader-ruby-size", `${state.settings.rubySize}em`);
+  document.documentElement.style.setProperty("--reader-ruby-color", state.settings.rubyColor);
   elements.fontSizeRange.value = String(state.settings.fontSize);
   elements.fontSizeValue.textContent = `${state.settings.fontSize}px`;
   elements.lineHeightRange.value = String(state.settings.lineHeight);
   elements.lineHeightValue.textContent = state.settings.lineHeight.toFixed(2).replace(/0$/, "");
+  elements.rubySizeRange.value = String(state.settings.rubySize);
+  elements.rubySizeValue.textContent = `${Math.round(state.settings.rubySize * 100)}%`;
+  elements.rubyColorInput.value = state.settings.rubyColor;
+  elements.rubyColorValue.textContent = state.settings.rubyColor;
 }
 
 function updateFontSize(event) {
@@ -1982,10 +2004,27 @@ function updateLineHeight(event) {
   saveSettings();
 }
 
-function resetSettings() {
-  state.settings = { fontSize: 20, lineHeight: 2.05 };
+function updateRubySize(event) {
+  state.settings.rubySize = clampNumber(Number(event.target.value), 0.28, 0.75, DEFAULT_READER_SETTINGS.rubySize);
   applyReaderSettings();
   saveSettings();
+}
+
+function updateRubyColor(event) {
+  state.settings.rubyColor = normalizeColor(event.target.value, DEFAULT_READER_SETTINGS.rubyColor);
+  applyReaderSettings();
+  saveSettings();
+}
+
+function resetSettings() {
+  state.settings = { ...DEFAULT_READER_SETTINGS };
+  applyReaderSettings();
+  saveSettings();
+}
+
+function normalizeColor(value, fallback) {
+  const color = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
 }
 
 function openSettings() {
