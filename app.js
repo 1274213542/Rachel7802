@@ -411,7 +411,7 @@ async function analyzeText() {
 
   if (!tokens && hasLookupApi()) {
     try {
-      elements.analysisStatus.textContent = "正在连接后端完整词典分析文本...";
+      elements.analysisStatus.textContent = "正在分析...";
       tokens = await fetchBackendAnalysis(text);
     } catch {
       tokens = null;
@@ -436,7 +436,7 @@ async function analyzeText() {
 
   if (!tokens) {
     try {
-      elements.analysisStatus.textContent = hasLookupApi() ? "正在尝试后端完整词典分析..." : "正在分析文本...";
+      elements.analysisStatus.textContent = "正在分析...";
       tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
       if (!tokens) throw new Error("no backend analysis");
       if (tokenizerFailed) {
@@ -447,7 +447,7 @@ async function analyzeText() {
       const statusText = apiBaseUrl
         ? state.lookupApiOnline
           ? "可用"
-          : "使用备用分析，后端暂不可用"
+          : "备用分析"
         : isStaticDeployment()
           ? "静态版内置分析"
           : "使用备用分析";
@@ -515,7 +515,7 @@ async function fetchBackendAnalysis(text) {
   const tokens = normalizeBackendTokens(text, payload.tokens);
   if (!tokens.length) throw new Error("backend analysis returned no tokens");
   state.lookupApiOnline = true;
-  setDictionaryStatus("后端读音分析已连接", true);
+  setDictionaryStatus("可用", true);
   return tokens;
 }
 
