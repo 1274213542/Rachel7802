@@ -140,6 +140,12 @@
     }
 
     if (!tokens) {
+      if (tokenizerFailed && isStaticDeployment()) {
+        tokens = fallbackTokenize(text);
+      }
+    }
+
+    if (!tokens) {
       try {
         elements.analysisStatus.textContent = hasLookupApi() ? "本地假名词典失败，正在尝试后端分析..." : "正在分析文本...";
         tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
