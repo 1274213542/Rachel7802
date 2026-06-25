@@ -129,6 +129,11 @@
       setDictionaryStatus("已使用本地分析缓存", true);
     }
 
+    if (!tokens && isStaticDeployment()) {
+      tokens = fallbackTokenize(text);
+      setDictionaryStatus("静态版轻量分析", true);
+    }
+
     try {
       if (!tokens) {
         const tokenizer = await withPatchTimeout(getTokenizer(), isStaticDeployment() ? 12000 : 18000);
