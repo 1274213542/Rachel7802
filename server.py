@@ -4,16 +4,12 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import importlib.util
 import json
 import os
 import re
 import socket
 import ssl
-
-try:
-    from janome.tokenizer import Tokenizer as JanomeTokenizer
-except Exception:
-    JanomeTokenizer = None
 
 
 HTTP_TIMEOUT = 8
@@ -24,6 +20,7 @@ DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 TRADITIONAL_TO_SIMPLIFIED = {}
 JISHO_CACHE = {}
 JANOME_TOKENIZER = None
+JANOME_IMPORT_ERROR = None
 
 FALLBACK_WORD_HINTS = {
     "昨日": {"reading": "きのう", "pos": "名词", "meaning": "昨天"},
@@ -80,7 +77,7 @@ class ReaderHandler(SimpleHTTPRequestHandler):
             self.write_json(
                 {
                     "online": True,
-                    "analyzer": "janome" if JanomeTokenizer else "fallback",
+                    "analyzer": "janome" if is_janome_available() else "fallback",
                     "sources": ["Janome local dictionary", "Jisho/JMdict", "Tatoeba", "OpenCC", "MyMemory public TM", "OpenAI API optional"],
                     "openai": "enabled" if os.environ.get("OPENAI_API_KEY") else "missing_api_key",
                     "openaiModel": os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
@@ -252,12 +249,23 @@ def analyze_text(text):
     }
 
 def get_janome_tokenizer():
-    global JANOME_TOKENIZER
-    if not JanomeTokenizer:
+    global JANOME_TOKENIZER, JANOME_IMPORT_ERROR
+    if JANOME_TOKENIZER:
+        return JANOME_TOKENIZER
+    if JANOME_IMPORT_ERROR or not is_janome_available():
         return None
-    if JANOME_TOKENIZER is None:
+    try:
+        from janome.tokenizer import Tokenizer as JanomeTokenizer
+
         JANOME_TOKENIZER = JanomeTokenizer()
-    return JANOME_TOKENIZER
+        return JANOME_TOKENIZER
+    except Exception as error:
+        JANOME_IMPORT_ERROR = error
+        return None
+
+
+def is_janome_available():
+    return importlib.util.find_spec("janome") is not None
 
 
 def janome_tokenize(text):
