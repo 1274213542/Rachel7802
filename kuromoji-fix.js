@@ -116,7 +116,7 @@
     }
 
     elements.analyzeButton.disabled = true;
-    elements.analysisStatus.textContent = "正在使用完整词典分析文本...";
+    elements.analysisStatus.textContent = "正在分析...";
     hideTooltip();
     closeDetailPanel();
 
