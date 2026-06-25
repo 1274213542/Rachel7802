@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>日语阅读助手</title>
-    <link rel="stylesheet" href="./styles.css?v=20260625-janome5" />
-    <script src="./app.js?v=20260625-janome5" defer></script>
-    <script src="./kuromoji-fix.js?v=20260625-janome5" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=20260625-settings1" />
+    <script src="./app.js?v=20260625-settings1" defer></script>
+    <script src="./kuromoji-fix.js?v=20260625-settings1" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -109,6 +109,22 @@
             <output id="lineHeightValue">2.05</output>
           </label>
           <input id="lineHeightRange" class="range-control" type="range" min="1.55" max="2.5" step="0.05" value="2.05" />
+
+          <label class="setting-row" for="rubySizeRange">
+            <span>
+              <strong>假名大小</strong>
+            </span>
+            <output id="rubySizeValue">42%</output>
+          </label>
+          <input id="rubySizeRange" class="range-control" type="range" min="0.28" max="0.75" step="0.01" value="0.42" />
+
+          <label class="setting-row" for="rubyColorInput">
+            <span>
+              <strong>假名颜色</strong>
+            </span>
+            <output id="rubyColorValue">#5f8f89</output>
+          </label>
+          <input id="rubyColorInput" class="color-control" type="color" value="#5f8f89" />
 
           <button class="ghost-button reset-settings" id="resetSettingsButton" type="button">恢复默认</button>
         </div>
