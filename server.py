@@ -10,6 +10,11 @@ import re
 import socket
 import ssl
 
+try:
+    from janome.tokenizer import Tokenizer as JanomeTokenizer
+except Exception:
+    JanomeTokenizer = None
+
 
 HTTP_TIMEOUT = 8
 OPENCC_TS_CHARACTERS_URL = "https://raw.githubusercontent.com/BYVoid/OpenCC/master/data/dictionary/TSCharacters.txt"
@@ -19,7 +24,6 @@ DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 TRADITIONAL_TO_SIMPLIFIED = {}
 JISHO_CACHE = {}
 JANOME_TOKENIZER = None
-JANOME_IMPORT_ERROR = None
 
 FALLBACK_WORD_HINTS = {
     "昨日": {"reading": "きのう", "pos": "名词", "meaning": "昨天"},
@@ -76,7 +80,8 @@ class ReaderHandler(SimpleHTTPRequestHandler):
             self.write_json(
                 {
                     "online": True,
-                    "sources": ["Jisho/JMdict", "Tatoeba", "OpenCC", "MyMemory public TM", "OpenAI API optional"],
+                    "analyzer": "janome" if JanomeTokenizer else "fallback",
+                    "sources": ["Janome local dictionary", "Jisho/JMdict", "Tatoeba", "OpenCC", "MyMemory public TM", "OpenAI API optional"],
                     "openai": "enabled" if os.environ.get("OPENAI_API_KEY") else "missing_api_key",
                     "openaiModel": os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
                 }
@@ -226,11 +231,13 @@ def analyze_text(text):
         return {"tokens": [], "lookupCount": 0, "readableCount": 0, "source": "backend_fallback", "notices": ["文本为空。"]}
 
     tokens = janome_tokenize(text)
-    source = "backend_janome"
-    if tokens is None:
+    if tokens:
+        source = "backend_janome"
+    else:
         tokens = fallback_tokenize(text)
         source = "backend_jisho_enriched"
         enriched_count, skipped_count = enrich_tokens_with_jisho(tokens)
+        notices.append("后端完整日语词典未启用，已使用备用分析。")
         if skipped_count:
             notices.append(f"为避免在线查询过慢，本次只补全前 {enriched_count} 个需要联网确认读音的词。")
 
@@ -244,59 +251,92 @@ def analyze_text(text):
         "notices": notices,
     }
 
-
 def get_janome_tokenizer():
-    global JANOME_TOKENIZER, JANOME_IMPORT_ERROR
-    if JANOME_TOKENIZER:
-        return JANOME_TOKENIZER
-    if JANOME_IMPORT_ERROR:
+    global JANOME_TOKENIZER
+    if not JanomeTokenizer:
         return None
-    try:
-        from janome.tokenizer import Tokenizer
-
-        JANOME_TOKENIZER = Tokenizer()
-        return JANOME_TOKENIZER
-    except Exception as error:
-        JANOME_IMPORT_ERROR = error
-        return None
+    if JANOME_TOKENIZER is None:
+        JANOME_TOKENIZER = JanomeTokenizer()
+    return JANOME_TOKENIZER
 
 
 def janome_tokenize(text):
     tokenizer = get_janome_tokenizer()
     if not tokenizer:
-        return None
+        return []
 
     tokens = []
     cursor = 0
-    for index, token in enumerate(tokenizer.tokenize(text)):
-        surface = token.surface
-        found_at = text.find(surface, cursor)
-        start = found_at if found_at >= 0 else cursor
-        end = start + len(surface)
+    index = 0
+    try:
+        analyzed_tokens = list(tokenizer.tokenize(text))
+    except Exception:
+        return []
+
+    for analyzed in analyzed_tokens:
+        surface = analyzed.surface or ""
+        if not surface:
+            continue
+
+        found = text.find(surface, cursor)
+        if found < 0:
+            found = cursor
+
+        if found > cursor:
+            skipped = text[cursor:found]
+            tokens.append(create_janome_token(skipped, skipped, "", "", cursor, index, False))
+            index += 1
+
+        start = found
+        end = found + len(surface)
+        base = analyzed.base_form if analyzed.base_form and analyzed.base_form != "*" else surface
+        reading = to_hiragana(analyzed.reading if analyzed.reading and analyzed.reading != "*" else "")
+        pos = translate_janome_pos(analyzed.part_of_speech or "")
+        tokens.append(create_janome_token(surface, base, reading, pos, start, index, has_kanji(surface)))
         cursor = end
+        index += 1
 
-        pos_parts = [part for part in (token.part_of_speech or "").split(",") if part and part != "*"]
-        pos_head = pos_parts[0] if pos_parts else "词语"
-        reading = to_hiragana(token.reading if token.reading and token.reading != "*" else "")
-        ruby_segments = build_ruby_segments(surface, reading)
-        display_reading = "".join(segment.get("reading", "") for segment in ruby_segments if segment.get("reading"))
-        lookup = has_kanji(surface) and pos_head not in {"記号", "助詞", "助動詞"}
+    if cursor < len(text):
+        trailing = text[cursor:]
+        tokens.append(create_janome_token(trailing, trailing, "", "", cursor, index, False))
 
-        tokens.append(
-            {
-                "id": f"token-{index}",
-                "surface": surface,
-                "base": token.base_form if token.base_form and token.base_form != "*" else surface,
-                "reading": reading,
-                "displayReading": display_reading,
-                "rubySegments": ruby_segments,
-                "pos": translate_japanese_pos(pos_head),
-                "start": start,
-                "end": end,
-                "lookup": bool(lookup),
-            }
-        )
     return tokens
+
+
+def create_janome_token(surface, base, reading, pos, start, index, lookup):
+    ruby_segments = build_ruby_segments(surface, reading)
+    return {
+        "id": f"token-{index}",
+        "surface": surface,
+        "base": base or surface,
+        "reading": reading,
+        "displayReading": "".join(segment.get("reading", "") for segment in ruby_segments if segment.get("reading")),
+        "rubySegments": ruby_segments,
+        "pos": pos or "词语",
+        "start": start,
+        "end": start + len(surface),
+        "lookup": bool(lookup),
+    }
+
+
+def translate_janome_pos(pos_text):
+    primary = (pos_text or "").split(",")[0]
+    return {
+        "名詞": "名词",
+        "動詞": "动词",
+        "形容詞": "形容词",
+        "形容動詞": "形容动词",
+        "副詞": "副词",
+        "連体詞": "连体词",
+        "接続詞": "接续词",
+        "感動詞": "感叹词",
+        "助詞": "助词",
+        "助動詞": "助动词",
+        "記号": "符号",
+        "接頭詞": "接头词",
+        "フィラー": "填充词",
+        "その他": "其他",
+    }.get(primary, primary or "词语")
 
 
 def fallback_tokenize(text):
