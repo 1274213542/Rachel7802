@@ -72,18 +72,18 @@
     if (isStaticDeployment()) {
       setDictionaryStatus("假名词典待加载", true);
       elements.analysisStatus.textContent = apiBaseUrl
-        ? "页面已可操作；第一次分析时会加载假名词典，详细释义和例句会连接后端。"
-        : "线上静态版可使用阅读、假名、收藏和标记；联网释义需要后端服务。";
+        ? "后端连接中"
+        : "待分析";
       return;
     }
 
     if (location.protocol === "file:") {
       if (apiBaseUrl) {
         setDictionaryStatus("假名词典待加载", true);
-        elements.analysisStatus.textContent = "当前是本地文件页；第一次分析时会加载假名词典，详细释义会连接线上后端。";
+        elements.analysisStatus.textContent = "后端连接中";
       } else {
         setDictionaryStatus("请使用 http 链接", false);
-        elements.analysisStatus.textContent = "当前是本地文件模式，无法使用在线查词；请打开局域网 http 链接。";
+        elements.analysisStatus.textContent = "请使用 http 链接";
       }
     }
   };
@@ -190,8 +190,8 @@
     collapseSourcePanel();
     elements.analysisStatus.textContent = lookupCount
       ? usedAnalysisCache
-        ? "已从本地缓存快速完成分析。桌面端悬停查看，点击打开详情；手机端轻触显示或隐藏。"
-        : "分析完成。桌面端悬停查看，点击打开详情；手机端轻触显示或隐藏。"
+        ? "已从缓存完成分析。"
+        : "分析完成。"
       : "分析完成，但没有识别到包含汉字的词语。";
   };
 
