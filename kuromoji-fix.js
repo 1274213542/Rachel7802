@@ -131,7 +131,7 @@
 
     if (!tokens && hasLookupApi()) {
       try {
-        elements.analysisStatus.textContent = "正在连接后端完整词典分析文本...";
+        elements.analysisStatus.textContent = "正在分析...";
         tokens = await fetchBackendAnalysis(text);
       } catch {
         tokens = null;
@@ -156,7 +156,7 @@
 
     if (!tokens) {
       try {
-        elements.analysisStatus.textContent = hasLookupApi() ? "正在尝试后端完整词典分析..." : "正在分析文本...";
+        elements.analysisStatus.textContent = "正在分析...";
         tokens = hasLookupApi() ? await fetchBackendAnalysis(text) : null;
         if (!tokens) throw new Error("no backend analysis");
         if (tokenizerFailed) {
@@ -167,7 +167,7 @@
         const statusText = apiBaseUrl
           ? state.lookupApiOnline
             ? "可用"
-            : "使用备用分析，后端暂不可用"
+            : "备用分析"
           : isStaticDeployment()
             ? "静态版内置分析"
             : "使用备用分析";
