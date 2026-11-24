@@ -57,8 +57,7 @@ function reviewedTokens(text, ruby) {
     return new Blob(chunks).arrayBuffer();
   }
 
-  function parseArticle(buffer) {
-    const item = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+  function parseArticle(item) {
     if (item?.v !== 1 || typeof item.title !== "string" || typeof item.text !== "string" ||
         !item.title.trim() || item.title.length > 180 || !item.text || item.text.length > 60000 ||
         item.text !== item.text.trim() || /[\u0000-\u001f]/.test(item.title) ||
@@ -89,13 +88,20 @@ function reviewedTokens(text, ruby) {
     }
   }
 
-  async function importArticle(readBuffer) {
+  async function importArticle(readBuffer, fromFile = false) {
     const revision = ++importRevision;
     const feedback = document.querySelector("#importReviewedStatus");
     feedback.textContent = "";
     try {
-      const article = parseArticle(await readBuffer());
+      const buffer = await readBuffer();
       if (revision !== importRevision) return;
+      const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+      if (fromFile && data?.kind === "jr-library") {
+        await window.openReaderLibraryFile(data, () => revision === importRevision);
+        return;
+      }
+      if (buffer.byteLength > maxJsonBytes) throw new Error("文本文件过大。");
+      const article = parseArticle(data);
       saveArticle(article);
       elements.sourceText.value = article.text;
       handleSourceInput();
@@ -106,8 +112,11 @@ function reviewedTokens(text, ruby) {
       }
     } catch (error) {
       if (revision !== importRevision) return;
-      const reason = error instanceof Error && /[\u3400-\u9fff]/.test(error.message)
+      let reason = error instanceof Error && /[\u3400-\u9fff]/.test(error.message)
         ? error.message : "请检查导入链接或文件是否完整。";
+      if (fromFile && ["NotReadableError", "NotFoundError"].includes(error?.name)) {
+        reason = "请先在「文件」中下载这份收藏夹，再重新选择。";
+      }
       feedback.textContent = elements.analysisStatus.textContent = "导入失败。" + reason;
     }
   }
@@ -125,9 +134,9 @@ function reviewedTokens(text, ruby) {
     const file = fileInput.files[0];
     fileInput.value = "";
     if (file) void importArticle(() => {
-      if (file.size > maxJsonBytes) throw new Error("文本文件过大。");
+      if (file.size > window.readerDrive.maxFileBytes) throw new Error("收藏夹文件过大。");
       return file.arrayBuffer();
-    });
+    }, true);
   });
   window.addEventListener("hashchange", consumeLink);
   consumeLink();

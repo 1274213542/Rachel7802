@@ -123,20 +123,46 @@
     return !!folder || localStorage.getItem(publisherKey) === "1";
   }
 
-  function importLibrary(inbound) {
-    if (isPublisher()) {
+  function importLibrary(inbound, fileReport = null) {
+    if (isPublisher() && !fileReport) {
       validate(inbound);
       const ids = new Set(inbound.items.map(i => i.id));
       return [...state.textFavorites.values()].filter(i => ids.has(idOf(i, "items")));
     }
-    return mergeSnapshot(inbound, false);
+    const imported = mergeSnapshot(inbound, false, fileReport);
+    if (fileReport && folder) schedule();
+    return imported;
   }
 
-  function mergeSnapshot(inbound, fromDisk) {
+  function mergeSnapshot(inbound, fromDisk, fileReport = null) {
     validate(inbound);
     const local = library();
     const localItems = new Map(storedArray(textKey).map(i => [idOf(i, "items"), i]));
     const localWords = new Map(storedArray(wordKey).map(i => [i.key, i]));
+    // A manually selected library may be the successor to a reviewed single-text
+    // import. Its original content hash is its stable ID, even after a Mac edit.
+    if (fileReport) {
+      for (const incoming of inbound.items) {
+        const prior = localItems.get(incoming.id);
+        if (!prior || prior.driveMirrored) continue;
+        const original = prior.key === incoming.id && prior.title === incoming.title &&
+          getTextFavoriteKey(prior.text) === incoming.id && Array.isArray(prior.reviewedRuby) &&
+          !prior.parentUpdatedAt;
+        if (prior.text === incoming.text) {
+          const changedRuby = Array.isArray(prior.reviewedRuby) && Array.isArray(incoming.ruby) &&
+            JSON.stringify(prior.reviewedRuby) !== JSON.stringify(incoming.ruby);
+          if (!changedRuby) continue;
+          if (!original) throw new Error("同一正文有两份不同的校对注音，已保留本机收藏。");
+        }
+        localItems.delete(incoming.id);
+        if (!original) {
+          fileReport.localCopies++;
+          const id = "local-" + crypto.randomUUID();
+          localItems.set(id, { ...prior, id, driveMirrored: false, title: prior.title + "（本机副本）" });
+        }
+      }
+      local.items = [...localItems.values()].map(toFile);
+    }
     const owns = (set, id) => fromDisk || !set.has(id) || set.get(id).driveMirrored;
     const incomingItems = inbound.items.filter(i => owns(localItems, i.id) || localItems.get(i.id).text === i.text);
     const incomingWords = (inbound.words || []).filter(i => owns(localWords, i.key) ||
@@ -453,7 +479,7 @@
   connect.addEventListener("click", chooseFolder);
   let restored;
   const ready = new Promise(resolve => { restored = resolve; });
-  window.readerDrive = { ready, importLibrary, openItem, isPublisher, observe, saveChanges, select, edit };
+  window.readerDrive = { ready, maxFileBytes, importLibrary, openItem, isPublisher, observe, saveChanges, select, edit };
   window.addEventListener("storage", event => {
     if (event.key === textKey) { loadTextFavorites(); updateTextFavoriteButton(); }
     if (event.key === wordKey) loadFavorites();
