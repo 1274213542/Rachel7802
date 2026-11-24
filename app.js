@@ -203,7 +203,12 @@ function clearInput() {
   elements.sourceText.focus();
 }
 
-function handleSourceInput() {
+function handleSourceInput(event) {
+  if (event?.type === "input") {
+    if (!event.isComposing) window.readerDrive?.edit(elements.sourceText.value);
+  } else {
+    window.readerDrive?.select(elements.sourceText.value.trim());
+  }
   updateTextFavoriteButton();
   if (elements.sourceText.value.trim() !== state.lastText) {
     state.showAllReadings = false;
@@ -821,7 +826,7 @@ function appendRubyTokenContent(span, token) {
   segments.forEach((segment) => {
     const text = String(segment.text || "");
     const reading = String(segment.reading || "");
-    if (text && reading && (token.reviewed || hasKanji(text))) {
+    if (text && reading && (token.reviewed || token.localRuby || hasKanji(text))) {
       const ruby = document.createElement("ruby");
       const rb = document.createElement("rb");
       rb.textContent = text;
@@ -1156,6 +1161,9 @@ function openReaderEditMode(offset = 0) {
   editor.className = "reader-edit-area";
   editor.spellcheck = false;
   editor.value = state.lastText;
+  editor.addEventListener("input", event => {
+    if (!event.isComposing) window.readerDrive?.edit(editor.value);
+  });
   elements.reader.append(editor);
   requestAnimationFrame(() => {
     editor.focus();
@@ -1181,6 +1189,7 @@ function finishReaderEditMode() {
   state.isEditingReader = false;
   elements.reader.classList.remove("editing");
   elements.sourceText.value = text;
+  window.readerDrive?.edit(text);
   state.showAllReadings = false;
   state.visibleReadingKeys.clear();
   hideHighlightToolbar();
@@ -1655,7 +1664,7 @@ function renderDetail(token, entry) {
 }
 
 async function lookupWord(token, options = {}) {
-  if (token.reviewed) return buildLocalLookupEntry(token);
+  if (token.reviewed || token.localRuby) return buildLocalLookupEntry(token);
   const key = token.base || token.surface;
   if (state.lookupCache.has(key)) return state.lookupCache.get(key);
   const entry = await fetchTrustedLookup(token, options);
@@ -1889,6 +1898,7 @@ function toggleCurrentTextFavorite() {
   }
 
   saveTextFavorites();
+  window.readerDrive?.select(text);
   updateTextFavoriteButton();
 }
 
@@ -1923,9 +1933,11 @@ function loadFavorites() {
   } catch {
     state.favorites = new Map();
   }
+  window.readerDrive?.observe("words");
 }
 
 function saveFavorites() {
+  if (window.readerDrive) return window.readerDrive.saveChanges("words");
   localStorage.setItem("japanese-reader-favorites", JSON.stringify([...state.favorites.values()]));
 }
 
@@ -1938,9 +1950,11 @@ function loadTextFavorites(strict = false) {
     if (strict) throw error;
     state.textFavorites = new Map();
   }
+  window.readerDrive?.observe("items");
 }
 
 function saveTextFavorites() {
+  if (window.readerDrive) return window.readerDrive.saveChanges("items");
   localStorage.setItem("japanese-reader-text-favorites", JSON.stringify([...state.textFavorites.values()]));
 }
 

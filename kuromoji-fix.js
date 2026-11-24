@@ -127,9 +127,11 @@
     let tokenizerFailed = false;
     const favorite = state.textFavorites.get(getTextFavoriteKey(text));
     const reviewed = favorite?.text === text && Object.hasOwn(favorite, "reviewedRuby");
-    if (reviewed) {
+    const privateText = favorite?.text === text && favorite.drivePrivate;
+    if (reviewed || privateText) {
       try {
-        tokens = reviewedTokens(text, favorite.reviewedRuby);
+        tokens = reviewedTokens(text, favorite.reviewedRuby || favorite.autoRuby || []);
+        if (!reviewed) tokens = tokens.map(token => ({ ...token, reviewed: false, localRuby: true }));
         state.showAllReadings = true;
       } catch {
         elements.analyzeButton.disabled = false;
@@ -204,7 +206,7 @@
     elements.reader.classList.remove("editing");
     state.highlights = loadHighlightsForText(text);
     renderReader(text, tokens);
-    if (!reviewed) saveCachedAnalysis(text, tokens);
+    if (!reviewed && !privateText) saveCachedAnalysis(text, tokens);
     elements.analyzeButton.disabled = false;
     const lookupCount = tokens.filter((token) => token.lookup).length;
     elements.tokenCount.textContent = `${lookupCount} 个可查词`;
@@ -212,7 +214,9 @@
     updateHighlightButtons();
     updateReaderEditButton();
     collapseSourcePanel();
-    elements.analysisStatus.textContent = lookupCount
+    elements.analysisStatus.textContent = privateText && !lookupCount
+      ? "已显示收藏正文，此稿尚无已保存的假名。"
+      : lookupCount
       ? usedAnalysisCache
         ? "分析完成。"
         : "分析完成。"

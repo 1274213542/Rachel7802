@@ -75,6 +75,8 @@ function reviewedTokens(text, ruby) {
     const key = getTextFavoriteKey(article.text);
     const existing = state.textFavorites.get(key);
     if (existing && existing.text !== article.text) throw new Error("此文本与另一条收藏发生冲突。");
+    if (existing?.title === article.title &&
+        JSON.stringify(existing.reviewedRuby) === JSON.stringify(article.reviewedRuby)) return;
     state.textFavorites.set(key, {
       ...existing, ...article, key, savedAt: existing?.savedAt || new Date().toISOString(),
     });

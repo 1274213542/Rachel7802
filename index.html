@@ -4,10 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>日语阅读助手</title>
-    <link rel="stylesheet" href="./styles.css?v=20261124-import1" />
-    <script src="./app.js?v=20261124-import1" defer></script>
-    <script src="./kuromoji-fix.js?v=20261124-import1" defer></script>
-    <script src="./private-import.js?v=20261124-import1" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=20261124-drive1" />
+    <script src="./app.js?v=20261124-drive1" defer></script>
+    <script src="./kuromoji-fix.js?v=20261124-drive1" defer></script>
+    <script src="./private-import.js?v=20261124-drive1" defer></script>
+    <script src="./drive-sync.js?v=20261124-drive1" defer></script>
+    <script src="./phone-library.js?v=20261124-drive1" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -142,6 +144,8 @@
           </div>
           <button class="icon-button" id="closeFavoritesButton" type="button" aria-label="关闭收藏夹">×</button>
         </div>
+        <button type="button" class="ghost-button" id="driveConnectButton" hidden>连接 iCloud 云盘</button>
+        <p id="driveSyncStatus" role="status" class="muted-status"></p>
         <button type="button" class="ghost-button" id="importReviewedButton">导入已校对的文本</button>
         <input type="file" id="importReviewedFile" accept=".json,application/json" hidden />
         <p id="importReviewedStatus" role="status"></p>
