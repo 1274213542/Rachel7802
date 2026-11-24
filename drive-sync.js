@@ -259,8 +259,32 @@
     schedule();
   }
 
-  // Map exact unchanged spans. Never transfer a reading to a different surviving occurrence by guess.
+  // Punctuation-only edits preserve the exact order of lexical characters, even for repeated words.
+  // Map UTF-16 offsets and leave out only a span whose own characters are now separated.
+  function carryRubyAcrossPauses(oldText, newText, spans) {
+    const lexical = /[^\s\p{P}]/gu;
+    const newer = newText.matchAll(lexical);
+    const positions = new Int32Array(oldText.length).fill(-1);
+    for (const original of oldText.matchAll(lexical)) {
+      const next = newer.next();
+      if (next.done || original[0] !== next.value[0]) return null;
+      for (let unit = 0; unit < original[0].length; unit++) {
+        positions[original.index + unit] = next.value.index + unit;
+      }
+    }
+    if (!newer.next().done) return null;
+    return spans.flatMap(([start, end, reading]) => {
+      const mapped = positions[start];
+      if (mapped < 0 || positions[end - 1] !== mapped + end - start - 1) return [];
+      return [[mapped, mapped + end - start, reading]];
+    });
+  }
+
+  // For lexical edits, use the exact unchanged edges and unique surrounding context.
   function carryRuby(oldText, newText, spans) {
+    if (!spans.length) return [];
+    const paused = carryRubyAcrossPauses(oldText, newText, spans);
+    if (paused !== null) return paused;
     const left = commonPrefixLength(oldText, newText);
     const right = Math.min(commonSuffixLength(oldText, newText), Math.min(oldText.length, newText.length) - left);
     const delta = newText.length - oldText.length;
