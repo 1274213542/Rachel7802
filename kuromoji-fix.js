@@ -108,7 +108,9 @@
     }
   };
 
+  let analysisRevision = 0;
   analyzeText = async function analyzeText() {
+    const revision = ++analysisRevision;
     const text = elements.sourceText.value.trim();
     if (!text) {
       elements.analysisStatus.textContent = "请先输入一段日语文本。";
@@ -123,7 +125,20 @@
     let tokens;
     let usedAnalysisCache = false;
     let tokenizerFailed = false;
-    tokens = loadCachedAnalysis(text);
+    const favorite = state.textFavorites.get(getTextFavoriteKey(text));
+    const reviewed = favorite?.text === text && Object.hasOwn(favorite, "reviewedRuby");
+    if (reviewed) {
+      try {
+        tokens = reviewedTokens(text, favorite.reviewedRuby);
+        state.showAllReadings = true;
+      } catch {
+        elements.analyzeButton.disabled = false;
+        elements.analysisStatus.textContent = "收藏中的注音数据无法读取，请重新导入。";
+        return;
+      }
+    } else {
+      tokens = loadCachedAnalysis(text);
+    }
     if (tokens) {
       usedAnalysisCache = true;
       setDictionaryStatus("可用", true);
@@ -138,6 +153,7 @@
       }
     }
 
+    if (revision !== analysisRevision) return;
     try {
       if (!tokens && !isStaticDeployment()) {
         const tokenizer = await withPatchTimeout(getTokenizer(), isStaticDeployment() ? 12000 : 18000);
@@ -148,6 +164,7 @@
       tokens = tokens || null;
     }
 
+    if (revision !== analysisRevision) return;
     if (!tokens) {
       if (tokenizerFailed && isStaticDeployment()) {
         tokens = fallbackTokenize(text);
@@ -163,6 +180,7 @@
           tokens = chooseMoreReadablePatchTokens(tokens, fallbackTokenize(text));
         }
       } catch {
+        if (revision !== analysisRevision) return;
         tokens = fallbackTokenize(text);
         const statusText = apiBaseUrl
           ? state.lookupApiOnline
@@ -175,12 +193,18 @@
       }
     }
 
+    if (revision !== analysisRevision) return;
+    if (text !== elements.sourceText.value.trim()) {
+      elements.analyzeButton.disabled = false;
+      return;
+    }
     state.lastText = text;
     state.lastTokens = tokens;
     state.isEditingReader = false;
+    elements.reader.classList.remove("editing");
     state.highlights = loadHighlightsForText(text);
     renderReader(text, tokens);
-    saveCachedAnalysis(text, tokens);
+    if (!reviewed) saveCachedAnalysis(text, tokens);
     elements.analyzeButton.disabled = false;
     const lookupCount = tokens.filter((token) => token.lookup).length;
     elements.tokenCount.textContent = `${lookupCount} 个可查词`;

@@ -821,7 +821,7 @@ function appendRubyTokenContent(span, token) {
   segments.forEach((segment) => {
     const text = String(segment.text || "");
     const reading = String(segment.reading || "");
-    if (text && reading && hasKanji(text)) {
+    if (text && reading && (token.reviewed || hasKanji(text))) {
       const ruby = document.createElement("ruby");
       const rb = document.createElement("rb");
       rb.textContent = text;
@@ -1655,6 +1655,7 @@ function renderDetail(token, entry) {
 }
 
 async function lookupWord(token, options = {}) {
+  if (token.reviewed) return buildLocalLookupEntry(token);
   const key = token.base || token.surface;
   if (state.lookupCache.has(key)) return state.lookupCache.get(key);
   const entry = await fetchTrustedLookup(token, options);
@@ -1928,12 +1929,13 @@ function saveFavorites() {
   localStorage.setItem("japanese-reader-favorites", JSON.stringify([...state.favorites.values()]));
 }
 
-function loadTextFavorites() {
+function loadTextFavorites(strict = false) {
   try {
     const raw = localStorage.getItem("japanese-reader-text-favorites");
     const items = raw ? JSON.parse(raw) : [];
     state.textFavorites = new Map(items.map((item) => [item.key, item]));
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     state.textFavorites = new Map();
   }
 }
